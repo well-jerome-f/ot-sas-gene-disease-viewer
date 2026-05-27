@@ -76,9 +76,10 @@ def gene_records(df: pd.DataFrame) -> list[dict]:
 
 
 app = dash.Dash(__name__, title="Open Targets SAS Variant Browser")
+server = app.server
 
 
-@app.server.route("/download/mapping.parquet")
+@server.route("/download/mapping.parquet")
 def download_mapping():
     return send_file(DATA_PATH, as_attachment=True, download_name=DATA_PATH.name)
 
