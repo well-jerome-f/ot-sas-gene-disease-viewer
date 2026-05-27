@@ -1,0 +1,12 @@
+{
+  "min_l2g_score": 0.25,
+  "mapped_rows": 242992,
+  "genes": 9391,
+  "lof_positive_genes": 1246,
+  "disease_traits": 1463,
+  "disease_gene_pairs": 66893,
+  "variants": 30557,
+  "lof_variants": 1809,
+  "median_l2g_score_flat_rows": 0.6719422042369843,
+  "median_l2g_score_disease_gene_pairs": 0.6558728218078613
+}

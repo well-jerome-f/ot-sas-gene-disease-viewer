@@ -2,3 +2,4 @@ pandas
 pyarrow
 dash
 flask
+gunicorn

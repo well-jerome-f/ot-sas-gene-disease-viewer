@@ -42,7 +42,7 @@ python3 /Users/jerome/work_data/codex_workspace/ot_sas_gene_disease_viewer/build
 ## Start the viewer
 
 ```bash
-python3 /Users/jerome/work_data/codex_workspace/ot_sas_gene_disease_viewer/app.py
+python3 app.py
 ```
 
 Then open:
@@ -72,3 +72,44 @@ Build statistics are written beside the parquet as:
 ```text
 /Users/jerome/work_data/codex_workspace/gnomad_sas_parquet/ot_sas_disease_gene_variant_map.score_ge_0.25.parquet.stats.json
 ```
+
+## Deploy
+
+This is a Dash/Flask app, so it needs a Python web host. GitHub Pages cannot run it directly because GitHub Pages only serves static files.
+
+The repo is ready for a service such as Render, Railway, Fly.io, or a VM. The production start command is:
+
+```bash
+gunicorn app:server --bind 0.0.0.0:$PORT
+```
+
+The app reads data from:
+
+```text
+data/ot_sas_disease_gene_variant_map.score_ge_0.25.parquet
+```
+
+You can override that path with:
+
+```bash
+OT_SAS_MAPPING_PATH=/path/to/mapping.parquet
+```
+
+### Render Example
+
+1. Push this repository to GitHub.
+2. In Render, create a new Web Service from the GitHub repository.
+3. Use Python as the runtime.
+4. Use this build command:
+
+```bash
+pip install -r requirements.txt
+```
+
+5. Use this start command:
+
+```bash
+gunicorn app:server --bind 0.0.0.0:$PORT
+```
+
+6. Deploy and share the Render URL.

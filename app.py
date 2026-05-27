@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import dash
@@ -9,9 +10,9 @@ from dash import Input, Output, State, dash_table, dcc, html
 from flask import send_file
 
 
-DATA_PATH = Path(
-    "/Users/jerome/work_data/codex_workspace/gnomad_sas_parquet/ot_sas_disease_gene_variant_map.score_ge_0.25.parquet"
-)
+APP_DIR = Path(__file__).resolve().parent
+DEFAULT_DATA_PATH = APP_DIR / "data" / "ot_sas_disease_gene_variant_map.score_ge_0.25.parquet"
+DATA_PATH = Path(os.environ.get("OT_SAS_MAPPING_PATH", DEFAULT_DATA_PATH))
 
 
 def load_mapping() -> pd.DataFrame:
