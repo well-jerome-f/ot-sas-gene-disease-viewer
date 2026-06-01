@@ -11,7 +11,7 @@ from flask import send_file
 
 
 APP_DIR = Path(__file__).resolve().parent
-DEFAULT_DATA_PATH = APP_DIR / "data" / "ot_sas_disease_gene_variant_map.score_ge_0.25.parquet"
+DEFAULT_DATA_PATH = APP_DIR / "data" / "ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.25.parquet"
 DATA_PATH = Path(os.environ.get("OT_SAS_MAPPING_PATH", DEFAULT_DATA_PATH))
 
 

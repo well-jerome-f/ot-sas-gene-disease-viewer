@@ -14,7 +14,7 @@ BASE_DIR = Path("/Users/jerome/work_data/codex_workspace/gnomad_sas_parquet")
 DEFAULT_VARIANTS = BASE_DIR / "gnomad.sas.enriched.investigate.parquet"
 DEFAULT_OT_EVIDENCE = BASE_DIR / "opentargets_disease_target_credset_filtered.parquet"
 DEFAULT_DISEASE = BASE_DIR / "disease" / "disease.parquet"
-DEFAULT_OUTPUT = BASE_DIR / "ot_sas_disease_gene_variant_map.score_ge_0.25.parquet"
+DEFAULT_OUTPUT = BASE_DIR / "ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.25.parquet"
 
 NON_DISEASE_THERAPEUTIC_AREAS = {
     "EFO_0000651",  # phenotype
@@ -93,6 +93,7 @@ def load_variants(path: Path) -> pd.DataFrame:
         "varid",
         "AF_sas",
         "AF_nfe",
+        "AF_fin",
         "sas_enrichment",
         "consequence",
         "impact",
@@ -123,6 +124,7 @@ def load_variants(path: Path) -> pd.DataFrame:
             "varid",
             "AF_sas",
             "AF_nfe",
+            "AF_fin",
             "sas_enrichment",
             "consequence",
             "variant_is_lof",
@@ -208,11 +210,22 @@ def build_mapping(
     excluded_areas: set[str],
     tsv_output_path: Path | None,
     min_score: float,
+    exclude_eur_rare_genes: bool,
+    eur_rare_af_max: float,
 ) -> pd.DataFrame:
     disease_terms = load_disease_terms(disease_path, excluded_areas)
     variants = load_variants(variants_path)
+    eur_rare_genes: set[str] = set()
+    if exclude_eur_rare_genes:
+        eur_af = variants[["AF_nfe", "AF_fin"]].apply(pd.to_numeric, errors="coerce").fillna(0).max(axis=1)
+        eur_rare_mask = eur_af.gt(0) & eur_af.le(eur_rare_af_max)
+        eur_rare_genes = set(variants.loc[eur_rare_mask, "ensembl_gene_id"].dropna())
+        variants = variants[~variants["ensembl_gene_id"].isin(eur_rare_genes)].copy()
+
     disease_gene = load_and_aggregate_evidence(evidence_path, disease_terms)
     disease_gene = disease_gene[disease_gene["ot_score"] >= min_score].copy()
+    if eur_rare_genes:
+        disease_gene = disease_gene[~disease_gene["ensembl_gene_id"].isin(eur_rare_genes)].copy()
 
     mapped = disease_gene.merge(variants, on="ensembl_gene_id", how="inner")
     mapped = mapped[
@@ -268,6 +281,10 @@ def build_mapping(
         )
         if len(mapped)
         else None,
+        "exclude_eur_rare_genes": exclude_eur_rare_genes,
+        "eur_rare_af_max": eur_rare_af_max if exclude_eur_rare_genes else None,
+        "eur_rare_populations": ["AF_nfe", "AF_fin"] if exclude_eur_rare_genes else [],
+        "eur_rare_excluded_genes": len(eur_rare_genes),
     }
     output_path.with_suffix(output_path.suffix + ".stats.json").write_text(json.dumps(stats, indent=2) + "\n")
     if tsv_output_path:
@@ -286,6 +303,17 @@ def main() -> None:
     parser.add_argument("--tsv-output", type=Path, default=None)
     parser.add_argument("--min-score", type=float, default=0.25, help="Minimum Open Targets/L2G score to retain.")
     parser.add_argument(
+        "--disable-eur-rare-gene-exclusion",
+        action="store_true",
+        help="Do not exclude genes with rare coding variants observed in NFE/EUR.",
+    )
+    parser.add_argument(
+        "--eur-rare-af-max",
+        type=float,
+        default=0.001,
+        help="Maximum AF_nfe used to flag rare EUR/NFE coding variants for gene-level exclusion.",
+    )
+    parser.add_argument(
         "--exclude-therapeutic-area",
         action="append",
         default=sorted(NON_DISEASE_THERAPEUTIC_AREAS),
@@ -301,6 +329,8 @@ def main() -> None:
         excluded_areas=set(args.exclude_therapeutic_area),
         tsv_output_path=args.tsv_output,
         min_score=args.min_score,
+        exclude_eur_rare_genes=not args.disable_eur_rare_gene_exclusion,
+        eur_rare_af_max=args.eur_rare_af_max,
     )
     print(f"Wrote {len(mapped):,} disease-gene-variant rows to {args.output}")
     print(f"Genes: {mapped['ensembl_gene_id'].nunique():,}")

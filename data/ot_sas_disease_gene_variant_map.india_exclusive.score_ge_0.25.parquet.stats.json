@@ -1,0 +1,19 @@
+{
+  "min_l2g_score": 0.25,
+  "mapped_rows": 2559,
+  "genes": 364,
+  "lof_positive_genes": 48,
+  "disease_traits": 633,
+  "disease_gene_pairs": 2222,
+  "variants": 417,
+  "lof_variants": 54,
+  "median_l2g_score_flat_rows": 0.6276870965957642,
+  "median_l2g_score_disease_gene_pairs": 0.617414802312851,
+  "exclude_eur_rare_genes": true,
+  "eur_rare_af_max": 0.001,
+  "eur_rare_populations": [
+    "AF_nfe",
+    "AF_fin"
+  ],
+  "eur_rare_excluded_genes": 13078
+}
