@@ -190,6 +190,8 @@
               <th>Ensembl gene id</th>
               <th>symbol</th>
               <th>LoF</th>
+              <th>cum AF LoF</th>
+              <th>cum AF missense</th>
               <th>diseases</th>
               <th>variants</th>
               <th>max score</th>
@@ -222,6 +224,7 @@
               <th>varid</th>
               <th>AF_sas</th>
               <th>AF_nfe</th>
+              <th>CADD</th>
               <th>sas_enrichment</th>
               <th>consequence</th>
             </tr>
@@ -301,7 +304,7 @@
         diseaseTable.clear().rows.add(diseaseRows).draw();
 
         const variantRows = scalarRows(
-          `SELECT chrom, pos, varid, AF_sas, AF_nfe, sas_enrichment, consequence
+          `SELECT chrom, pos, varid, AF_sas, AF_nfe, cadd_phred, sas_enrichment, consequence
            FROM variants
            WHERE ensembl_gene_id = ?
            ORDER BY chrom_sort, pos, varid`,
@@ -326,7 +329,7 @@
         renderStats(stats);
 
         const genes = scalarRows(
-          `SELECT ensembl_gene_id, gene_symbol, gene_has_lof, disease_count, variant_count, max_score
+          `SELECT ensembl_gene_id, gene_symbol, gene_has_lof, cum_af_sas_lof, cum_af_sas_missense, disease_count, variant_count, max_score
            FROM genes
            ORDER BY CASE WHEN gene_symbol = '' THEN 1 ELSE 0 END, gene_symbol, ensembl_gene_id`
         );
@@ -344,6 +347,8 @@
             { data: "ensembl_gene_id" },
             { data: "gene_symbol" },
             { data: "gene_has_lof", render: (value) => value ? "yes" : "" },
+            { data: "cum_af_sas_lof", render: (value) => Number(value).toPrecision(4) },
+            { data: "cum_af_sas_missense", render: (value) => Number(value).toPrecision(4) },
             { data: "disease_count" },
             { data: "variant_count" },
             { data: "max_score", render: (value) => fmtFloat(value) },
@@ -378,6 +383,7 @@
             { data: "varid" },
             { data: "AF_sas", render: (value) => Number(value).toPrecision(4) },
             { data: "AF_nfe", render: (value) => Number(value).toPrecision(4) },
+            { data: "cadd_phred", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(3) },
             { data: "sas_enrichment", render: (value) => fmtFloat(value) },
             { data: "consequence" },
           ],

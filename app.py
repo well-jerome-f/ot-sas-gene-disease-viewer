@@ -11,7 +11,7 @@ from flask import send_file
 
 
 APP_DIR = Path(__file__).resolve().parent
-DEFAULT_DATA_PATH = APP_DIR / "data" / "ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.25.parquet"
+DEFAULT_DATA_PATH = APP_DIR / "data" / "ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
 DATA_PATH = Path(os.environ.get("OT_SAS_MAPPING_PATH", DEFAULT_DATA_PATH))
 
 
@@ -35,6 +35,8 @@ def make_gene_table(df: pd.DataFrame) -> pd.DataFrame:
             variant_count=("varid", "nunique"),
             max_score=("ot_score", "max"),
             gene_has_lof=("gene_has_lof", "max"),
+            cum_af_sas_lof=("cum_af_sas_lof", "max"),
+            cum_af_sas_missense=("cum_af_sas_missense", "max"),
         )
         .reset_index()
     )
@@ -164,6 +166,18 @@ app.layout = html.Div(
                                 {"name": "Ensembl gene id", "id": "ensembl_gene_id"},
                                 {"name": "symbol", "id": "gene_symbol"},
                                 {"name": "LoF", "id": "gene_has_lof"},
+                                {
+                                    "name": "cum AF LoF",
+                                    "id": "cum_af_sas_lof",
+                                    "type": "numeric",
+                                    "format": {"specifier": ".4g"},
+                                },
+                                {
+                                    "name": "cum AF missense",
+                                    "id": "cum_af_sas_missense",
+                                    "type": "numeric",
+                                    "format": {"specifier": ".4g"},
+                                },
                                 {"name": "diseases", "id": "disease_count", "type": "numeric"},
                                 {"name": "variants", "id": "variant_count", "type": "numeric"},
                                 {
@@ -179,6 +193,8 @@ app.layout = html.Div(
                                 {"if": {"column_id": "ensembl_gene_id"}, "width": "180px"},
                                 {"if": {"column_id": "gene_symbol"}, "width": "100px"},
                                 {"if": {"column_id": "gene_has_lof"}, "width": "52px"},
+                                {"if": {"column_id": "cum_af_sas_lof"}, "width": "95px", "textAlign": "right"},
+                                {"if": {"column_id": "cum_af_sas_missense"}, "width": "120px", "textAlign": "right"},
                                 {"if": {"column_id": "disease_count"}, "width": "80px", "textAlign": "right"},
                                 {"if": {"column_id": "variant_count"}, "width": "80px", "textAlign": "right"},
                                 {"if": {"column_id": "max_score"}, "width": "90px", "textAlign": "right"},
@@ -269,6 +285,7 @@ app.layout = html.Div(
                                 {"name": "varid", "id": "varid"},
                                 {"name": "AF_sas", "id": "AF_sas", "type": "numeric", "format": {"specifier": ".6g"}},
                                 {"name": "AF_nfe", "id": "AF_nfe", "type": "numeric", "format": {"specifier": ".6g"}},
+                                {"name": "CADD", "id": "cadd_phred", "type": "numeric", "format": {"specifier": ".3g"}},
                                 {
                                     "name": "sas_enrichment",
                                     "id": "sas_enrichment",
@@ -284,6 +301,7 @@ app.layout = html.Div(
                                 {"if": {"column_id": "varid"}, "width": "150px"},
                                 {"if": {"column_id": "AF_sas"}, "width": "90px", "textAlign": "right"},
                                 {"if": {"column_id": "AF_nfe"}, "width": "90px", "textAlign": "right"},
+                                {"if": {"column_id": "cadd_phred"}, "width": "80px", "textAlign": "right"},
                                 {"if": {"column_id": "sas_enrichment"}, "width": "110px", "textAlign": "right"},
                                 {"if": {"column_id": "consequence"}, "width": "190px"},
                             ],
@@ -501,13 +519,16 @@ def update_gene_details(active_cell: dict | None, virtual_rows: list[dict] | Non
         .sort_values(["ot_score", "disease_name"], ascending=[False, True], kind="mergesort")
     )
     variants = (
-        gene_rows[["chrom", "chrom_sort", "pos", "varid", "AF_sas", "AF_nfe", "sas_enrichment", "consequence"]]
-        .drop_duplicates(["chrom", "pos", "varid", "AF_sas", "AF_nfe", "sas_enrichment", "consequence"])
+        gene_rows[
+            ["chrom", "chrom_sort", "pos", "varid", "AF_sas", "AF_nfe", "cadd_phred", "sas_enrichment", "consequence"]
+        ]
+        .drop_duplicates(["chrom", "pos", "varid", "AF_sas", "AF_nfe", "cadd_phred", "sas_enrichment", "consequence"])
         .sort_values(["chrom_sort", "pos", "varid"], kind="mergesort")
         .drop(columns=["chrom_sort"])
     )
     variants["AF_sas"] = variants["AF_sas"].map(lambda value: round_float(value, 8))
     variants["AF_nfe"] = variants["AF_nfe"].map(lambda value: round_float(value, 8))
+    variants["cadd_phred"] = variants["cadd_phred"].map(lambda value: round_float(value, 3))
     variants["sas_enrichment"] = variants["sas_enrichment"].map(lambda value: round_float(value, 3))
 
     label = f"{gene_symbol} ({ensembl_gene_id})" if gene_symbol else ensembl_gene_id

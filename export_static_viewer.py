@@ -10,7 +10,7 @@ import pandas as pd
 
 
 APP_DIR = Path(__file__).resolve().parent
-DEFAULT_PARQUET = APP_DIR / "data" / "ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.25.parquet"
+DEFAULT_PARQUET = APP_DIR / "data" / "ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
 DEFAULT_STATIC_DIR = APP_DIR / "static"
 DEFAULT_DB = DEFAULT_STATIC_DIR / "data" / "ot_sas_viewer.sqlite"
 
@@ -34,6 +34,8 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
             variant_count=("varid", "nunique"),
             max_score=("ot_score", "max"),
             gene_has_lof=("gene_has_lof", "max"),
+            cum_af_sas_lof=("cum_af_sas_lof", "max"),
+            cum_af_sas_missense=("cum_af_sas_missense", "max"),
         )
         .reset_index()
     )
@@ -57,8 +59,23 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
     ].sort_values(["ensembl_gene_id", "ot_score", "disease_name"], ascending=[True, False, True], kind="mergesort")
 
     variants = (
-        df[["ensembl_gene_id", "chrom", "chrom_sort", "pos", "varid", "AF_sas", "AF_nfe", "sas_enrichment", "consequence"]]
-        .drop_duplicates(["ensembl_gene_id", "chrom", "pos", "varid", "AF_sas", "AF_nfe", "sas_enrichment", "consequence"])
+        df[
+            [
+                "ensembl_gene_id",
+                "chrom",
+                "chrom_sort",
+                "pos",
+                "varid",
+                "AF_sas",
+                "AF_nfe",
+                "cadd_phred",
+                "sas_enrichment",
+                "consequence",
+            ]
+        ]
+        .drop_duplicates(
+            ["ensembl_gene_id", "chrom", "pos", "varid", "AF_sas", "AF_nfe", "cadd_phred", "sas_enrichment", "consequence"]
+        )
         .sort_values(["ensembl_gene_id", "chrom_sort", "pos", "varid"], kind="mergesort")
     )
 

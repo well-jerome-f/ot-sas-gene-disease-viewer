@@ -2,9 +2,10 @@
 
 This folder contains a small local workflow for browsing SAS-enriched coding variants against Open Targets GWAS credible-set target-disease evidence.
 
-The default build keeps disease-gene associations with Open Targets/L2G score `>= 0.25`.
+The default build keeps disease-gene associations with Open Targets/L2G score `>= 0.15`.
 It also excludes genes where NFE/FIN European populations carry rare coding variants with `0 < AF <= 0.001`, which creates the India-exclusive opportunity set.
 Genes with at least one mapped LoF variant are highlighted in blue in the viewer.
+Gene-level cumulative AF columns use `AF_sas` and are calculated as `1 - product(1 - AF_i)` separately for LoF and missense variants.
 
 ## Build the mapped file
 
@@ -15,7 +16,7 @@ python3 /Users/jerome/work_data/codex_workspace/ot_sas_gene_disease_viewer/build
 Default output:
 
 ```text
-/Users/jerome/work_data/codex_workspace/gnomad_sas_parquet/ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.25.parquet
+/Users/jerome/work_data/codex_workspace/gnomad_sas_parquet/ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet
 ```
 
 The disease filter keeps terms assigned to disease therapeutic areas and excludes broad non-disease areas:
@@ -106,13 +107,13 @@ http://127.0.0.1:8050/download/mapping.parquet
 The local file is:
 
 ```text
-/Users/jerome/work_data/codex_workspace/gnomad_sas_parquet/ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.25.parquet
+/Users/jerome/work_data/codex_workspace/gnomad_sas_parquet/ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet
 ```
 
 Build statistics are written beside the parquet as:
 
 ```text
-/Users/jerome/work_data/codex_workspace/gnomad_sas_parquet/ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.25.parquet.stats.json
+/Users/jerome/work_data/codex_workspace/gnomad_sas_parquet/ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet.stats.json
 ```
 
 ## Deploy
@@ -149,7 +150,7 @@ gunicorn app:server --bind 0.0.0.0:$PORT
 The app reads data from:
 
 ```text
-data/ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.25.parquet
+data/ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet
 ```
 
 You can override that path with:

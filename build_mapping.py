@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Iterable
 
@@ -14,7 +15,7 @@ BASE_DIR = Path("/Users/jerome/work_data/codex_workspace/gnomad_sas_parquet")
 DEFAULT_VARIANTS = BASE_DIR / "gnomad.sas.enriched.investigate.parquet"
 DEFAULT_OT_EVIDENCE = BASE_DIR / "opentargets_disease_target_credset_filtered.parquet"
 DEFAULT_DISEASE = BASE_DIR / "disease" / "disease.parquet"
-DEFAULT_OUTPUT = BASE_DIR / "ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.25.parquet"
+DEFAULT_OUTPUT = BASE_DIR / "ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
 
 NON_DISEASE_THERAPEUTIC_AREAS = {
     "EFO_0000651",  # phenotype
@@ -56,6 +57,15 @@ def first_non_null(values: pd.Series) -> object:
     return values.iloc[0] if len(values) else None
 
 
+def cumulative_frequency(values: pd.Series) -> float:
+    freqs = pd.to_numeric(values, errors="coerce").dropna().clip(lower=0.0, upper=1.0)
+    if freqs.empty:
+        return 0.0
+    if (freqs >= 1.0).any():
+        return 1.0
+    return 1.0 - math.exp(float((1.0 - freqs).map(math.log).sum()))
+
+
 def semicolon_join(values: pd.Series) -> str:
     seen: list[str] = []
     for value in values.dropna():
@@ -94,6 +104,7 @@ def load_variants(path: Path) -> pd.DataFrame:
         "AF_sas",
         "AF_nfe",
         "AF_fin",
+        "cadd_phred",
         "sas_enrichment",
         "consequence",
         "impact",
@@ -112,10 +123,31 @@ def load_variants(path: Path) -> pd.DataFrame:
     )
     variants["chrom"] = variants["chrom"].map(chrom_label)
     variants["chrom_sort"] = variants["chrom"].map(chrom_sort_key)
+    for numeric_col in ["AF_sas", "AF_nfe", "AF_fin", "cadd_phred", "sas_enrichment"]:
+        variants[numeric_col] = pd.to_numeric(variants[numeric_col], errors="coerce")
     variants["variant_is_lof"] = variants["lof"].fillna("").astype(str).str.strip().ne("") | variants[
         "impact"
     ].eq("HIGH")
+    variants["variant_is_missense"] = variants["consequence"].fillna("").astype(str).str.contains(
+        "missense_variant", regex=False
+    )
     variants["gene_has_lof"] = variants.groupby("ensembl_gene_id")["variant_is_lof"].transform("any")
+    unique_variant_classes = variants.drop_duplicates(["ensembl_gene_id", "varid", "variant_is_lof", "variant_is_missense"])
+    lof_caf = (
+        unique_variant_classes[unique_variant_classes["variant_is_lof"]]
+        .groupby("ensembl_gene_id")["AF_sas"]
+        .apply(cumulative_frequency)
+        .rename("cum_af_sas_lof")
+    )
+    missense_caf = (
+        unique_variant_classes[unique_variant_classes["variant_is_missense"]]
+        .groupby("ensembl_gene_id")["AF_sas"]
+        .apply(cumulative_frequency)
+        .rename("cum_af_sas_missense")
+    )
+    variants = variants.join(lof_caf, on="ensembl_gene_id").join(missense_caf, on="ensembl_gene_id")
+    variants["cum_af_sas_lof"] = variants["cum_af_sas_lof"].fillna(0.0)
+    variants["cum_af_sas_missense"] = variants["cum_af_sas_missense"].fillna(0.0)
     variants = variants.drop_duplicates(
         [
             "ensembl_gene_id",
@@ -125,9 +157,11 @@ def load_variants(path: Path) -> pd.DataFrame:
             "AF_sas",
             "AF_nfe",
             "AF_fin",
+            "cadd_phred",
             "sas_enrichment",
             "consequence",
             "variant_is_lof",
+            "variant_is_missense",
         ]
     )
     return variants.sort_values(["ensembl_gene_id", "chrom_sort", "pos", "varid"], kind="mergesort")
@@ -251,12 +285,16 @@ def build_mapping(
             "varid",
             "AF_sas",
             "AF_nfe",
+            "cadd_phred",
             "sas_enrichment",
             "consequence",
             "impact",
             "lof",
             "variant_is_lof",
+            "variant_is_missense",
             "gene_has_lof",
+            "cum_af_sas_lof",
+            "cum_af_sas_missense",
         ]
     ].sort_values(
         ["gene_symbol", "ensembl_gene_id", "ot_score", "disease_name", "chrom_sort", "pos"],
@@ -301,7 +339,7 @@ def main() -> None:
     parser.add_argument("--disease", type=Path, default=DEFAULT_DISEASE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--tsv-output", type=Path, default=None)
-    parser.add_argument("--min-score", type=float, default=0.25, help="Minimum Open Targets/L2G score to retain.")
+    parser.add_argument("--min-score", type=float, default=0.15, help="Minimum Open Targets/L2G score to retain.")
     parser.add_argument(
         "--disable-eur-rare-gene-exclusion",
         action="store_true",
