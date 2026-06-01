@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Open Targets SAS Variant Browser</title>
+    <link rel="stylesheet" href="https://cdn.datatables.net/2.0.8/css/dataTables.dataTables.min.css" />
+    <style>
+      :root {
+        color-scheme: light;
+        --border: #d7dce2;
+        --ink: #17202a;
+        --muted: #52616f;
+        --panel: #ffffff;
+        --page: #f5f7fa;
+        --blue: #dbeafe;
+        --blue-strong: #075985;
+      }
+      body {
+        margin: 0;
+        background: var(--page);
+        color: var(--ink);
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 20px;
+        padding: 18px 22px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+      }
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        letter-spacing: 0;
+      }
+      h2 {
+        margin: 18px 0 8px;
+        font-size: 15px;
+      }
+      .metrics {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        font-size: 13px;
+        color: #34495e;
+      }
+      .metrics span {
+        padding: 6px 9px;
+        border: 1px solid var(--border);
+        background: #f8fafc;
+        border-radius: 6px;
+      }
+      main {
+        display: grid;
+        grid-template-columns: minmax(390px, 34vw) minmax(0, 1fr);
+        gap: 18px;
+        padding: 18px;
+        box-sizing: border-box;
+      }
+      section {
+        min-width: 0;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(120px, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .stats div {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 9px 10px;
+      }
+      .stats span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 4px;
+      }
+      .stats strong {
+        display: block;
+        font-size: 16px;
+      }
+      .selected {
+        min-height: 24px;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .status {
+        padding: 10px 18px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      table.dataTable tbody tr.lof-row > * {
+        background: var(--blue);
+        font-weight: 700;
+      }
+      table.dataTable tbody tr.selected-row > * {
+        outline: 1px solid #2563eb;
+      }
+      a {
+        color: var(--blue-strong);
+      }
+      @media (max-width: 900px) {
+        header {
+          display: block;
+        }
+        .metrics {
+          margin-top: 12px;
+        }
+        main {
+          display: block;
+        }
+        .stats {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Open Targets SAS Variant Browser</h1>
+      <div class="metrics" id="topMetrics"></div>
+    </header>
+    <div class="status" id="status">Loading SQLite database...</div>
+    <main>
+      <section>
+        <table id="geneTable" class="display compact" style="width: 100%">
+          <thead>
+            <tr>
+              <th>Ensembl gene id</th>
+              <th>symbol</th>
+              <th>LoF</th>
+              <th>diseases</th>
+              <th>variants</th>
+              <th>max score</th>
+            </tr>
+          </thead>
+        </table>
+      </section>
+      <section>
+        <div class="stats" id="stats"></div>
+        <div class="selected" id="selectedGene"></div>
+        <h2>Associated diseases</h2>
+        <table id="diseaseTable" class="display compact" style="width: 100%">
+          <thead>
+            <tr>
+              <th>disease</th>
+              <th>disease id</th>
+              <th>score</th>
+              <th>evidence rows</th>
+              <th>study loci</th>
+              <th>description</th>
+            </tr>
+          </thead>
+        </table>
+        <h2>Mapped coding variants</h2>
+        <table id="variantTable" class="display compact" style="width: 100%">
+          <thead>
+            <tr>
+              <th>chrom</th>
+              <th>pos</th>
+              <th>varid</th>
+              <th>AF_sas</th>
+              <th>AF_nfe</th>
+              <th>sas_enrichment</th>
+              <th>consequence</th>
+            </tr>
+          </thead>
+        </table>
+      </section>
+    </main>
+
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.datatables.net/2.0.8/js/dataTables.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+    <script>
+      const DB_URL = "data/ot_sas_viewer.sqlite";
+      let db;
+      let geneTable;
+      let diseaseTable;
+      let variantTable;
+
+      function scalarRows(sql, params = []) {
+        const stmt = db.prepare(sql);
+        stmt.bind(params);
+        const rows = [];
+        while (stmt.step()) rows.push(stmt.getAsObject());
+        stmt.free();
+        return rows;
+      }
+
+      function valueFromJson(raw) {
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return raw;
+        }
+      }
+
+      function fmtNumber(value) {
+        return Number(value || 0).toLocaleString();
+      }
+
+      function fmtFloat(value, digits = 3) {
+        if (value === null || value === undefined || value === "") return "";
+        return Number(value).toFixed(digits);
+      }
+
+      function renderStats(stats) {
+        const metric = (label, value) => `<span>${label}</span><strong>${value}</strong>`;
+        document.getElementById("topMetrics").innerHTML = [
+          `${fmtNumber(stats.genes)} genes`,
+          `${fmtNumber(stats.disease_traits)} disease traits`,
+          `${fmtNumber(stats.variants)} variants`,
+          `L2G >= ${Number(stats.min_l2g_score).toFixed(2)}`,
+          `EUR rare excluded`
+        ].map((x) => `<span>${x}</span>`).join("");
+
+        document.getElementById("stats").innerHTML = [
+          metric("Disease-gene pairs", fmtNumber(stats.disease_gene_pairs)),
+          metric("LoF-positive genes", fmtNumber(stats.lof_positive_genes)),
+          metric("LoF variants", fmtNumber(stats.lof_variants)),
+          metric("Median L2G", fmtFloat(stats.median_l2g_score_disease_gene_pairs)),
+          metric("EUR-excluded genes", fmtNumber(stats.eur_rare_excluded_genes)),
+        ].map((x) => `<div>${x}</div>`).join("");
+      }
+
+      function loadGeneDetails(row) {
+        document.querySelectorAll("#geneTable tbody tr").forEach((tr) => tr.classList.remove("selected-row"));
+        const geneId = row.ensembl_gene_id;
+        const label = row.gene_symbol ? `${row.gene_symbol} (${geneId})` : geneId;
+        document.getElementById("selectedGene").textContent = label;
+
+        const diseaseRows = scalarRows(
+          `SELECT disease_name, disease_id, ot_score, evidence_count, study_locus_count, disease_description
+           FROM disease_gene
+           WHERE ensembl_gene_id = ?
+           ORDER BY ot_score DESC, disease_name`,
+          [geneId]
+        );
+        diseaseTable.clear().rows.add(diseaseRows).draw();
+
+        const variantRows = scalarRows(
+          `SELECT chrom, pos, varid, AF_sas, AF_nfe, sas_enrichment, consequence
+           FROM variants
+           WHERE ensembl_gene_id = ?
+           ORDER BY chrom_sort, pos, varid`,
+          [geneId]
+        );
+        variantTable.clear().rows.add(variantRows).draw();
+      }
+
+      async function main() {
+        const SQL = await initSqlJs({
+          locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
+        });
+        const response = await fetch(DB_URL);
+        if (!response.ok) throw new Error(`Could not load ${DB_URL}: ${response.status}`);
+        const buffer = await response.arrayBuffer();
+        db = new SQL.Database(new Uint8Array(buffer));
+
+        const stats = {};
+        scalarRows("SELECT key, value FROM stats").forEach((row) => {
+          stats[row.key] = valueFromJson(row.value);
+        });
+        renderStats(stats);
+
+        const genes = scalarRows(
+          `SELECT ensembl_gene_id, gene_symbol, gene_has_lof, disease_count, variant_count, max_score
+           FROM genes
+           ORDER BY CASE WHEN gene_symbol = '' THEN 1 ELSE 0 END, gene_symbol, ensembl_gene_id`
+        );
+
+        geneTable = new DataTable("#geneTable", {
+          data: genes,
+          pageLength: 18,
+          order: [],
+          rowCallback: function(row, data) {
+            if (data.gene_has_lof) row.classList.add("lof-row");
+          },
+          columns: [
+            { data: "ensembl_gene_id" },
+            { data: "gene_symbol" },
+            { data: "gene_has_lof", render: (value) => value ? "yes" : "" },
+            { data: "disease_count" },
+            { data: "variant_count" },
+            { data: "max_score", render: (value) => fmtFloat(value) },
+          ],
+        });
+
+        diseaseTable = new DataTable("#diseaseTable", {
+          data: [],
+          pageLength: 10,
+          order: [],
+          columns: [
+            { data: "disease_name" },
+            { data: "disease_id" },
+            { data: "ot_score", render: (value) => fmtFloat(value) },
+            { data: "evidence_count" },
+            { data: "study_locus_count" },
+            { data: "disease_description" },
+          ],
+        });
+
+        variantTable = new DataTable("#variantTable", {
+          data: [],
+          pageLength: 12,
+          order: [],
+          columns: [
+            { data: "chrom" },
+            { data: "pos" },
+            { data: "varid" },
+            { data: "AF_sas", render: (value) => Number(value).toPrecision(4) },
+            { data: "AF_nfe", render: (value) => Number(value).toPrecision(4) },
+            { data: "sas_enrichment", render: (value) => fmtFloat(value) },
+            { data: "consequence" },
+          ],
+        });
+
+        $("#geneTable tbody").on("click", "tr", function() {
+          const row = geneTable.row(this).data();
+          if (!row) return;
+          this.classList.add("selected-row");
+          loadGeneDetails(row);
+        });
+
+        if (genes.length) loadGeneDetails(genes[0]);
+        document.getElementById("status").textContent = `Loaded ${fmtNumber(genes.length)} genes from ${DB_URL}`;
+      }
+
+      main().catch((error) => {
+        document.getElementById("status").textContent = error.message;
+        console.error(error);
+      });
+    </script>
+  </body>
+</html>

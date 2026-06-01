@@ -69,16 +69,16 @@ Then open:
 http://127.0.0.1:8080
 ```
 
-GitHub Pages should publish the `static/` folder. The page is:
+GitHub Pages should publish the `docs/` folder. GitHub's branch-source Pages UI generally supports only `/` or `/docs`, so `docs/` mirrors the static viewer files.
 
 ```text
-static/index.html
+docs/index.html
 ```
 
 The browser-loaded database is:
 
 ```text
-static/data/ot_sas_viewer.sqlite
+docs/data/ot_sas_viewer.sqlite
 ```
 
 ## Start the viewer
@@ -125,7 +125,7 @@ Use the static viewer for GitHub Pages. It avoids Render cold starts and does no
 2. In GitHub, open the repository settings.
 3. Go to **Pages**.
 4. Set the source to deploy from a branch.
-5. Select branch `main` and folder `/static`.
+5. Select branch `main` and folder `/docs`.
 6. Save. GitHub will publish a URL like:
 
 ```text
