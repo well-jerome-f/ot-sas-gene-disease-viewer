@@ -15,5 +15,8 @@
     "AF_nfe",
     "AF_fin"
   ],
-  "eur_rare_excluded_genes": 13078
+  "eur_rare_excluded_genes": 13078,
+  "unmet_needs_source": "/Users/jerome/work_data/codex_workspace/ot_sas_gene_disease_viewer/data/unmet-needs-index.csv",
+  "disease_traits_with_unmet_needs": 213,
+  "disease_gene_pairs_with_unmet_needs": 1064
 }

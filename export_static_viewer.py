@@ -53,6 +53,10 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
             "disease_name",
             "disease_description",
             "ot_score",
+            "unmet_need_index",
+            "unmet_need_category",
+            "unmet_need_prevalence",
+            "unmet_need_key_needs",
             "evidence_count",
             "study_locus_count",
         ]
@@ -89,6 +93,10 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
         "lof_variants": int(df.loc[df["variant_is_lof"], "varid"].nunique()),
         "median_l2g_score_disease_gene_pairs": float(unique_disease_gene["ot_score"].median()),
         "min_l2g_score": float(df["ot_score"].min()),
+        "disease_traits_with_unmet_needs": int(df.loc[df["unmet_need_index"].notna(), "disease_id"].nunique()),
+        "disease_gene_pairs_with_unmet_needs": int(
+            df.loc[df["unmet_need_index"].notna(), ["ensembl_gene_id", "disease_id"]].drop_duplicates().shape[0]
+        ),
     }
     stats_json = parquet_path.with_suffix(parquet_path.suffix + ".stats.json")
     if stats_json.exists():

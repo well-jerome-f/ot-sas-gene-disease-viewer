@@ -209,8 +209,12 @@
               <th>disease</th>
               <th>disease id</th>
               <th>score</th>
+              <th>unmet need</th>
+              <th>unmet category</th>
+              <th>prevalence</th>
               <th>evidence rows</th>
               <th>study loci</th>
+              <th>key unmet needs</th>
               <th>description</th>
             </tr>
           </thead>
@@ -285,6 +289,7 @@
           metric("LoF variants", fmtNumber(stats.lof_variants)),
           metric("Median L2G", fmtFloat(stats.median_l2g_score_disease_gene_pairs)),
           metric("EUR-excluded genes", fmtNumber(stats.eur_rare_excluded_genes)),
+          metric("Unmet-mapped diseases", fmtNumber(stats.disease_traits_with_unmet_needs)),
         ].map((x) => `<div>${x}</div>`).join("");
       }
 
@@ -295,7 +300,8 @@
         document.getElementById("selectedGene").textContent = label;
 
         const diseaseRows = scalarRows(
-          `SELECT disease_name, disease_id, ot_score, evidence_count, study_locus_count, disease_description
+          `SELECT disease_name, disease_id, ot_score, unmet_need_index, unmet_need_category, unmet_need_prevalence,
+                  evidence_count, study_locus_count, unmet_need_key_needs, disease_description
            FROM disease_gene
            WHERE ensembl_gene_id = ?
            ORDER BY ot_score DESC, disease_name`,
@@ -365,8 +371,12 @@
             { data: "disease_name" },
             { data: "disease_id" },
             { data: "ot_score", render: (value) => fmtFloat(value) },
+            { data: "unmet_need_index", render: (value) => value === null || value === "" ? "" : fmtFloat(value) },
+            { data: "unmet_need_category" },
+            { data: "unmet_need_prevalence" },
             { data: "evidence_count" },
             { data: "study_locus_count" },
+            { data: "unmet_need_key_needs" },
             { data: "disease_description" },
           ],
         });

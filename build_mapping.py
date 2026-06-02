@@ -16,6 +16,7 @@ DEFAULT_VARIANTS = BASE_DIR / "gnomad.sas.enriched.investigate.parquet"
 DEFAULT_OT_EVIDENCE = BASE_DIR / "opentargets_disease_target_credset_filtered.parquet"
 DEFAULT_DISEASE = BASE_DIR / "disease" / "disease.parquet"
 DEFAULT_OUTPUT = BASE_DIR / "ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
+DEFAULT_UNMET_NEEDS = Path(__file__).resolve().parent / "data" / "unmet-needs-index.csv"
 
 NON_DISEASE_THERAPEUTIC_AREAS = {
     "EFO_0000651",  # phenotype
@@ -74,6 +75,50 @@ def semicolon_join(values: pd.Series) -> str:
             if item and item not in seen:
                 seen.append(item)
     return ";".join(seen)
+
+
+def load_unmet_needs(path: Path | None) -> pd.DataFrame:
+    columns = [
+        "disease_id",
+        "unmet_need_name",
+        "unmet_need_description",
+        "unmet_need_category",
+        "unmet_need_therapeutic_area",
+        "unmet_need_prevalence",
+        "unmet_need_index",
+        "unmet_need_key_needs",
+        "unmet_need_pipeline_activity",
+        "unmet_need_burden_untreated",
+        "unmet_need_burden_treated",
+        "unmet_need_safety_tolerability",
+        "unmet_need_convenience_administration",
+    ]
+    if path is None or not path.exists():
+        return pd.DataFrame(columns=columns)
+
+    unmet = pd.read_csv(path)
+    if "opentargetsUrl" not in unmet.columns:
+        raise ValueError(f"Unmet-needs file is missing opentargetsUrl: {path}")
+    unmet["disease_id"] = unmet["opentargetsUrl"].astype(str).str.extract(r"/disease/([^/?#]+)")
+    unmet = unmet.dropna(subset=["disease_id"]).copy()
+    unmet = unmet.sort_values("unmetNeedIndex", ascending=False, kind="mergesort").drop_duplicates("disease_id")
+    unmet = unmet.rename(
+        columns={
+            "name": "unmet_need_name",
+            "description": "unmet_need_description",
+            "category": "unmet_need_category",
+            "therapeuticArea": "unmet_need_therapeutic_area",
+            "prevalence": "unmet_need_prevalence",
+            "unmetNeedIndex": "unmet_need_index",
+            "keyUnmetNeeds": "unmet_need_key_needs",
+            "pipelineActivity": "unmet_need_pipeline_activity",
+            "scores.burdenUntreated": "unmet_need_burden_untreated",
+            "scores.burdenTreated": "unmet_need_burden_treated",
+            "scores.safetyTolerability": "unmet_need_safety_tolerability",
+            "scores.convenienceAdministration": "unmet_need_convenience_administration",
+        }
+    )
+    return unmet[columns]
 
 
 def load_disease_terms(path: Path, excluded_areas: set[str]) -> pd.DataFrame:
@@ -167,7 +212,7 @@ def load_variants(path: Path) -> pd.DataFrame:
     return variants.sort_values(["ensembl_gene_id", "chrom_sort", "pos", "varid"], kind="mergesort")
 
 
-def load_and_aggregate_evidence(path: Path, disease_terms: pd.DataFrame) -> pd.DataFrame:
+def load_and_aggregate_evidence(path: Path, disease_terms: pd.DataFrame, unmet_needs: pd.DataFrame) -> pd.DataFrame:
     columns = [
         "targetId",
         "diseaseId",
@@ -194,6 +239,12 @@ def load_and_aggregate_evidence(path: Path, disease_terms: pd.DataFrame) -> pd.D
         }
     )
     evidence = evidence.merge(disease_terms, on="disease_id", how="left")
+    if not unmet_needs.empty:
+        evidence = evidence.merge(unmet_needs, on="disease_id", how="left")
+    else:
+        for col in load_unmet_needs(None).columns:
+            if col != "disease_id":
+                evidence[col] = None
     evidence = evidence[evidence["is_disease_trait"].fillna(False)].copy()
     evidence["disease_name"] = evidence["disease_name"].fillna(evidence["disease_name_from_metadata"])
     evidence["disease_description"] = evidence["disease_description"].fillna(
@@ -215,6 +266,18 @@ def load_and_aggregate_evidence(path: Path, disease_terms: pd.DataFrame) -> pd.D
             "publicationDate",
             "evidenceDate",
             "therapeutic_areas",
+            "unmet_need_name",
+            "unmet_need_description",
+            "unmet_need_category",
+            "unmet_need_therapeutic_area",
+            "unmet_need_prevalence",
+            "unmet_need_index",
+            "unmet_need_key_needs",
+            "unmet_need_pipeline_activity",
+            "unmet_need_burden_untreated",
+            "unmet_need_burden_treated",
+            "unmet_need_safety_tolerability",
+            "unmet_need_convenience_administration",
         ],
     ].rename(
         columns={
@@ -246,8 +309,10 @@ def build_mapping(
     min_score: float,
     exclude_eur_rare_genes: bool,
     eur_rare_af_max: float,
+    unmet_needs_path: Path | None,
 ) -> pd.DataFrame:
     disease_terms = load_disease_terms(disease_path, excluded_areas)
+    unmet_needs = load_unmet_needs(unmet_needs_path)
     variants = load_variants(variants_path)
     eur_rare_genes: set[str] = set()
     if exclude_eur_rare_genes:
@@ -256,7 +321,7 @@ def build_mapping(
         eur_rare_genes = set(variants.loc[eur_rare_mask, "ensembl_gene_id"].dropna())
         variants = variants[~variants["ensembl_gene_id"].isin(eur_rare_genes)].copy()
 
-    disease_gene = load_and_aggregate_evidence(evidence_path, disease_terms)
+    disease_gene = load_and_aggregate_evidence(evidence_path, disease_terms, unmet_needs)
     disease_gene = disease_gene[disease_gene["ot_score"] >= min_score].copy()
     if eur_rare_genes:
         disease_gene = disease_gene[~disease_gene["ensembl_gene_id"].isin(eur_rare_genes)].copy()
@@ -279,6 +344,18 @@ def build_mapping(
             "best_evidence_date",
             "literature_pmids",
             "therapeutic_areas",
+            "unmet_need_name",
+            "unmet_need_description",
+            "unmet_need_category",
+            "unmet_need_therapeutic_area",
+            "unmet_need_prevalence",
+            "unmet_need_index",
+            "unmet_need_key_needs",
+            "unmet_need_pipeline_activity",
+            "unmet_need_burden_untreated",
+            "unmet_need_burden_treated",
+            "unmet_need_safety_tolerability",
+            "unmet_need_convenience_administration",
             "chrom",
             "chrom_sort",
             "pos",
@@ -323,6 +400,13 @@ def build_mapping(
         "eur_rare_af_max": eur_rare_af_max if exclude_eur_rare_genes else None,
         "eur_rare_populations": ["AF_nfe", "AF_fin"] if exclude_eur_rare_genes else [],
         "eur_rare_excluded_genes": len(eur_rare_genes),
+        "unmet_needs_source": str(unmet_needs_path) if unmet_needs_path else None,
+        "disease_traits_with_unmet_needs": int(mapped.loc[mapped["unmet_need_index"].notna(), "disease_id"].nunique()),
+        "disease_gene_pairs_with_unmet_needs": int(
+            mapped.loc[mapped["unmet_need_index"].notna(), ["ensembl_gene_id", "disease_id"]]
+            .drop_duplicates()
+            .shape[0]
+        ),
     }
     output_path.with_suffix(output_path.suffix + ".stats.json").write_text(json.dumps(stats, indent=2) + "\n")
     if tsv_output_path:
@@ -337,6 +421,7 @@ def main() -> None:
     parser.add_argument("--variants", type=Path, default=DEFAULT_VARIANTS)
     parser.add_argument("--evidence", type=Path, default=DEFAULT_OT_EVIDENCE)
     parser.add_argument("--disease", type=Path, default=DEFAULT_DISEASE)
+    parser.add_argument("--unmet-needs", type=Path, default=DEFAULT_UNMET_NEEDS)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--tsv-output", type=Path, default=None)
     parser.add_argument("--min-score", type=float, default=0.15, help="Minimum Open Targets/L2G score to retain.")
@@ -369,6 +454,7 @@ def main() -> None:
         min_score=args.min_score,
         exclude_eur_rare_genes=not args.disable_eur_rare_gene_exclusion,
         eur_rare_af_max=args.eur_rare_af_max,
+        unmet_needs_path=args.unmet_needs,
     )
     print(f"Wrote {len(mapped):,} disease-gene-variant rows to {args.output}")
     print(f"Genes: {mapped['ensembl_gene_id'].nunique():,}")

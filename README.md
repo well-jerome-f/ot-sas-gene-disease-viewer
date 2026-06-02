@@ -6,6 +6,8 @@ The default build keeps disease-gene associations with Open Targets/L2G score `>
 It also excludes genes where NFE/FIN European populations carry rare coding variants with `0 < AF <= 0.001`, which creates the India-exclusive opportunity set.
 Genes with at least one mapped LoF variant are highlighted in blue in the viewer.
 Gene-level cumulative AF columns use `AF_sas` and are calculated as `1 - product(1 - AF_i)` separately for LoF and missense variants.
+Convoke unmet-needs scores are joined to Open Targets diseases by extracting the disease ID from `opentargetsUrl` in `data/unmet-needs-index.csv`.
+The current exact-ID join maps unmet-needs scores to 213 disease traits and 1,064 disease-gene pairs in the filtered dataset.
 
 ## Build the mapped file
 
@@ -81,6 +83,8 @@ The browser-loaded database is:
 ```text
 docs/data/ot_sas_viewer.sqlite
 ```
+
+The disease table includes Open Targets L2G score plus Convoke unmet-needs score, unmet-needs category, prevalence bucket, and key unmet-needs text when an exact Open Targets disease ID match is available.
 
 ## Start the viewer
 
