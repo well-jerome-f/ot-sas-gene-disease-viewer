@@ -190,8 +190,10 @@
               <th>Ensembl gene id</th>
               <th>symbol</th>
               <th>LoF</th>
-              <th>cum AF LoF</th>
-              <th>cum AF missense</th>
+              <th>SAS LoF AF</th>
+              <th>SAS missense AF</th>
+              <th>GI LoF AF</th>
+              <th>GI missense AF</th>
               <th>diseases</th>
               <th>variants</th>
               <th>max score</th>
@@ -227,9 +229,15 @@
               <th>pos</th>
               <th>varid</th>
               <th>AF_sas</th>
+              <th>GI_AF</th>
               <th>AF_nfe</th>
+              <th>AF_fin</th>
               <th>CADD</th>
-              <th>sas_enrichment</th>
+              <th>SAS/NFE enrich</th>
+              <th>SAS/FIN enrich</th>
+              <th>GI/NFE enrich</th>
+              <th>GI/FIN enrich</th>
+              <th>impact</th>
               <th>consequence</th>
             </tr>
           </thead>
@@ -310,7 +318,10 @@
         diseaseTable.clear().rows.add(diseaseRows).draw();
 
         const variantRows = scalarRows(
-          `SELECT chrom, pos, varid, AF_sas, AF_nfe, cadd_phred, sas_enrichment, consequence
+          `SELECT chrom, pos, varid, AF_sas, genome_india_af, AF_nfe, AF_fin, cadd_phred,
+                  sas_vs_nfe_enrichment, sas_vs_fin_enrichment,
+                  genome_india_vs_nfe_enrichment, genome_india_vs_fin_enrichment,
+                  impact, consequence
            FROM variants
            WHERE ensembl_gene_id = ?
            ORDER BY chrom_sort, pos, varid`,
@@ -335,7 +346,9 @@
         renderStats(stats);
 
         const genes = scalarRows(
-          `SELECT ensembl_gene_id, gene_symbol, gene_has_lof, cum_af_sas_lof, cum_af_sas_missense, disease_count, variant_count, max_score
+          `SELECT ensembl_gene_id, gene_symbol, gene_has_lof, cum_af_sas_lof, cum_af_sas_missense,
+                  cum_af_genome_india_lof, cum_af_genome_india_missense,
+                  disease_count, variant_count, max_score
            FROM genes
            ORDER BY CASE WHEN gene_symbol = '' THEN 1 ELSE 0 END, gene_symbol, ensembl_gene_id`
         );
@@ -355,6 +368,8 @@
             { data: "gene_has_lof", render: (value) => value ? "yes" : "" },
             { data: "cum_af_sas_lof", render: (value) => Number(value).toPrecision(4) },
             { data: "cum_af_sas_missense", render: (value) => Number(value).toPrecision(4) },
+            { data: "cum_af_genome_india_lof", render: (value) => Number(value).toPrecision(4) },
+            { data: "cum_af_genome_india_missense", render: (value) => Number(value).toPrecision(4) },
             { data: "disease_count" },
             { data: "variant_count" },
             { data: "max_score", render: (value) => fmtFloat(value) },
@@ -391,10 +406,16 @@
             { data: "chrom" },
             { data: "pos" },
             { data: "varid" },
-            { data: "AF_sas", render: (value) => Number(value).toPrecision(4) },
-            { data: "AF_nfe", render: (value) => Number(value).toPrecision(4) },
+            { data: "AF_sas", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(4) },
+            { data: "genome_india_af", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(4) },
+            { data: "AF_nfe", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(4) },
+            { data: "AF_fin", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(4) },
             { data: "cadd_phred", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(3) },
-            { data: "sas_enrichment", render: (value) => fmtFloat(value) },
+            { data: "sas_vs_nfe_enrichment", render: (value) => fmtFloat(value) },
+            { data: "sas_vs_fin_enrichment", render: (value) => fmtFloat(value) },
+            { data: "genome_india_vs_nfe_enrichment", render: (value) => fmtFloat(value) },
+            { data: "genome_india_vs_fin_enrichment", render: (value) => fmtFloat(value) },
+            { data: "impact" },
             { data: "consequence" },
           ],
         });

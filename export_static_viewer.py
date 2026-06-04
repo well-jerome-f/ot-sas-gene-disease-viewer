@@ -10,7 +10,7 @@ import pandas as pd
 
 
 APP_DIR = Path(__file__).resolve().parent
-DEFAULT_PARQUET = APP_DIR / "data" / "ot_sas_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
+DEFAULT_PARQUET = APP_DIR / "data" / "ot_sas_gi_vep115_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
 DEFAULT_STATIC_DIR = APP_DIR / "static"
 DEFAULT_DB = DEFAULT_STATIC_DIR / "data" / "ot_sas_viewer.sqlite"
 
@@ -36,6 +36,8 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
             gene_has_lof=("gene_has_lof", "max"),
             cum_af_sas_lof=("cum_af_sas_lof", "max"),
             cum_af_sas_missense=("cum_af_sas_missense", "max"),
+            cum_af_genome_india_lof=("cum_af_genome_india_lof", "max"),
+            cum_af_genome_india_missense=("cum_af_genome_india_missense", "max"),
         )
         .reset_index()
     )
@@ -71,14 +73,36 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
                 "pos",
                 "varid",
                 "AF_sas",
+                "genome_india_af",
                 "AF_nfe",
+                "AF_fin",
                 "cadd_phred",
                 "sas_enrichment",
+                "genome_india_enrichment",
+                "sas_vs_nfe_enrichment",
+                "sas_vs_fin_enrichment",
+                "genome_india_vs_nfe_enrichment",
+                "genome_india_vs_fin_enrichment",
                 "consequence",
+                "impact",
             ]
         ]
         .drop_duplicates(
-            ["ensembl_gene_id", "chrom", "pos", "varid", "AF_sas", "AF_nfe", "cadd_phred", "sas_enrichment", "consequence"]
+            [
+                "ensembl_gene_id",
+                "chrom",
+                "pos",
+                "varid",
+                "AF_sas",
+                "genome_india_af",
+                "AF_nfe",
+                "AF_fin",
+                "cadd_phred",
+                "sas_enrichment",
+                "genome_india_enrichment",
+                "consequence",
+                "impact",
+            ]
         )
         .sort_values(["ensembl_gene_id", "chrom_sort", "pos", "varid"], kind="mergesort")
     )

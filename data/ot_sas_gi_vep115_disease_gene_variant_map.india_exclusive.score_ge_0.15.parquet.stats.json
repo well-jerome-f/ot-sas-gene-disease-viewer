@@ -1,0 +1,21 @@
+{
+  "source_annotation": "VEP 115.1 coding-only VCF",
+  "min_l2g_score": 0.15,
+  "mapped_rows": 6540,
+  "genes": 432,
+  "lof_positive_genes": 39,
+  "disease_traits": 780,
+  "disease_gene_pairs": 3508,
+  "variants": 871,
+  "lof_variants": 67,
+  "median_l2g_score_disease_gene_pairs": 0.5729338228702545,
+  "exclude_eur_rare_genes": true,
+  "eur_rare_af_max": 0.001,
+  "eur_rare_populations": [
+    "AF_nfe",
+    "AF_fin"
+  ],
+  "eur_rare_excluded_genes": 13140,
+  "disease_traits_with_unmet_needs": 253,
+  "disease_gene_pairs_with_unmet_needs": 1417
+}
