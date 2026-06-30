@@ -63,7 +63,7 @@
       }
       main {
         display: grid;
-        grid-template-columns: minmax(340px, 32vw) minmax(0, 1fr);
+        grid-template-columns: minmax(320px, clamp(320px, 30vw, 520px)) minmax(0, 1fr);
         gap: 18px;
         padding: 18px;
         box-sizing: border-box;
@@ -132,6 +132,18 @@
         overflow-wrap: anywhere;
         line-height: 1.25;
         font-size: 13px;
+      }
+      table.dataTable th {
+        white-space: nowrap;
+      }
+      #variantTable td,
+      #diseaseTable td {
+        max-width: 260px;
+      }
+      #variantTable td:nth-child(3),
+      #variantTable td:last-child,
+      #diseaseTable td:last-child {
+        max-width: 420px;
       }
       table.dataTable tbody tr.lof-row > * {
         background: var(--blue);
@@ -244,6 +256,11 @@
               <th>AM score</th>
               <th>AM class</th>
               <th>ESM1b</th>
+              <th>popEVE</th>
+              <th>EVE</th>
+              <th>REVEL</th>
+              <th>ClinPred</th>
+              <th>interpretation</th>
               <th>consequence</th>
             </tr>
           </thead>
@@ -307,6 +324,7 @@
           metric("EUR-excluded genes", fmtNumber(stats.eur_rare_excluded_genes)),
           metric("AM threshold", fmtFloat(stats.alphamissense_threshold, 3)),
           metric("CADD threshold", fmtFloat(stats.cadd_missense_threshold, 1)),
+          metric("EUR-excluded pairs", fmtNumber(stats.eur_rare_excluded_gene_disease_pairs)),
         ].map((x) => `<div>${x}</div>`).join("");
       }
 
@@ -333,6 +351,7 @@
                   impact, plof_is_not_common_sas, variant_is_deleterious_missense,
                   missense_deleterious_by_cadd, missense_deleterious_by_alphamissense,
                   missense_deleterious_by_esm1b, am_pathogenicity, am_class, ESM1b_score,
+                  popEVE_score, EVE_SCORE, REVEL, ClinPred, missense_interpretation,
                   consequence
            FROM variants
            WHERE ensembl_gene_id = ?
@@ -441,6 +460,11 @@
             { data: "am_pathogenicity", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(3) },
             { data: "am_class" },
             { data: "ESM1b_score", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(3) },
+            { data: "popEVE_score", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(3) },
+            { data: "EVE_SCORE", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(3) },
+            { data: "REVEL", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(3) },
+            { data: "ClinPred", render: (value) => value === null || value === "" ? "" : Number(value).toPrecision(3) },
+            { data: "missense_interpretation" },
             { data: "consequence" },
           ],
         });

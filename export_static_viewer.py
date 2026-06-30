@@ -98,9 +98,21 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
                 "missense_deleterious_by_cadd",
                 "missense_deleterious_by_alphamissense",
                 "missense_deleterious_by_esm1b",
+                "missense_deleterious_by_popeve",
+                "missense_deleterious_by_eve",
+                "missense_deleterious_by_revel_or_clinpred",
+                "missense_core_high_count",
+                "missense_core_observed_count",
+                "missense_supplemental_high_count",
+                "missense_interpretation",
                 "am_pathogenicity",
                 "am_class",
                 "ESM1b_score",
+                "popEVE_score",
+                "EVE_SCORE",
+                "EVE_CLASS",
+                "REVEL",
+                "ClinPred",
             ]
         ]
         .drop_duplicates(
@@ -120,6 +132,7 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
                 "impact",
                 "plof_is_not_common_sas",
                 "variant_is_deleterious_missense",
+                "missense_interpretation",
             ]
         )
         .sort_values(["ensembl_gene_id", "chrom_sort", "pos", "varid"], kind="mergesort")
@@ -134,6 +147,11 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
         "variants": int(df["varid"].nunique()),
         "lof_variants": int(df.loc[df["plof_is_not_common_sas"], "varid"].nunique()),
         "deleterious_missense_variants": int(df.loc[df["variant_is_deleterious_missense"], "varid"].nunique()),
+        "missense_interpretation_counts": df.drop_duplicates(["varid", "ensembl_gene_id"])[
+            "missense_interpretation"
+        ].value_counts(dropna=False).to_dict()
+        if "missense_interpretation" in df.columns
+        else {},
         "genes_with_deleterious_missense": int(
             df.loc[df["gene_has_deleterious_missense"], "ensembl_gene_id"].nunique()
         ),

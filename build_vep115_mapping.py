@@ -24,6 +24,7 @@ DEFAULT_UNMET_NEEDS = APP_DIR / "data" / "unmet-needs-index.csv"
 DEFAULT_ANNOTATED = BASE_DIR / "vep115.coding.with_sas_india_enrichment.parquet"
 DEFAULT_HIGH_MODERATE = BASE_DIR / "vep115.plof_deleterious_missense.gene_variants.with_global_maf.parquet"
 DEFAULT_EUR_GENES = BASE_DIR / "vep115.plof_deleterious_missense.eur_rare_excluded_genes.parquet"
+DEFAULT_EUR_PAIRS = BASE_DIR / "vep115.plof_deleterious_missense.eur_rare_excluded_gene_disease_pairs.parquet"
 DEFAULT_OUTPUT = BASE_DIR / "ot_sas_gi_vep115_plof_deleterious_missense_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
 
 CHROM_ORDER = {str(i): i for i in range(1, 23)} | {"X": 23, "Y": 24, "XY": 25, "MT": 26, "M": 26}
@@ -51,6 +52,14 @@ ESM1B_CANDIDATE_COLUMNS = [
     "esm1b",
     "esm1b_score",
     "esm1b_rankscore",
+]
+
+POPEVE_CANDIDATE_COLUMNS = [
+    "popEVE",
+    "popEVE_score",
+    "popEVE_pathogenicity",
+    "popeve",
+    "popeve_score",
 ]
 
 
@@ -90,6 +99,48 @@ def optional_numeric_column(df: pd.DataFrame, candidates: list[str]) -> str | No
             df[col] = pd.to_numeric(df[col], errors="coerce")
             return col
     return None
+
+
+def normalize_score_columns(
+    df: pd.DataFrame,
+    esm1b_threshold: float | None,
+    popeve_threshold: float,
+    eve_threshold: float,
+    revel_threshold: float,
+    clinpred_threshold: float,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+    esm1b_col = optional_numeric_column(df, ESM1B_CANDIDATE_COLUMNS)
+    popeve_col = optional_numeric_column(df, POPEVE_CANDIDATE_COLUMNS)
+
+    if esm1b_col:
+        df["ESM1b_score"] = df[esm1b_col]
+    else:
+        df["ESM1b_score"] = pd.NA
+    if popeve_col:
+        df["popEVE_score"] = df[popeve_col]
+    else:
+        df["popEVE_score"] = pd.NA
+
+    am_class = df.get("am_class", pd.Series(index=df.index, dtype=object)).fillna("").astype(str).str.lower()
+    am_score = pd.to_numeric(df.get("am_pathogenicity", pd.Series(index=df.index, dtype=float)), errors="coerce")
+    eve_class = df.get("EVE_CLASS", pd.Series(index=df.index, dtype=object)).fillna("").astype(str).str.lower()
+    eve_score = pd.to_numeric(df.get("EVE_SCORE", pd.Series(index=df.index, dtype=float)), errors="coerce")
+
+    alpha_high = am_class.isin(ALPHAMISSENSE_DELETERIOUS_CLASSES) | am_score.ge(df.attrs["alphamissense_threshold"])
+    if esm1b_threshold is not None:
+        esm1b_high = pd.to_numeric(df["ESM1b_score"], errors="coerce").ge(esm1b_threshold)
+    else:
+        esm1b_high = pd.Series(False, index=df.index)
+    popeve_high = pd.to_numeric(df["popEVE_score"], errors="coerce").ge(popeve_threshold)
+
+    eve_high = eve_class.eq("pathogenic") | eve_score.ge(eve_threshold)
+    revel_high = pd.to_numeric(df.get("REVEL", pd.Series(index=df.index, dtype=float)), errors="coerce").ge(
+        revel_threshold
+    )
+    clinpred_high = pd.to_numeric(df.get("ClinPred", pd.Series(index=df.index, dtype=float)), errors="coerce").ge(
+        clinpred_threshold
+    )
+    return alpha_high, esm1b_high, popeve_high, eve_high, revel_high | clinpred_high
 
 
 def parse_float_expr(name: str) -> pl.Expr:
@@ -190,6 +241,10 @@ def prepare_high_moderate_variants(
     cadd_missense_threshold: float,
     alphamissense_threshold: float,
     esm1b_threshold: float | None,
+    popeve_threshold: float,
+    eve_threshold: float,
+    revel_threshold: float,
+    clinpred_threshold: float,
 ) -> pd.DataFrame:
     df = pd.read_parquet(annotated_path)
     df = df[df["IMPACT"].isin(["HIGH", "MODERATE"])].copy()
@@ -233,26 +288,77 @@ def prepare_high_moderate_variants(
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    esm1b_col = optional_numeric_column(df, ESM1B_CANDIDATE_COLUMNS)
+    df.attrs["alphamissense_threshold"] = alphamissense_threshold
 
     df["plof_is_not_common_sas"] = df["variant_is_lof"] & df["AF_sas"].fillna(0.0).le(max_plof_sas_af)
-    alpha_class = df.get("am_class", pd.Series(index=df.index, dtype=object)).fillna("").astype(str).str.lower()
-    alpha_score = df.get("am_pathogenicity", pd.Series(index=df.index, dtype=float))
-    df["missense_deleterious_by_cadd"] = df["variant_is_missense"] & df["cadd_phred"].ge(cadd_missense_threshold)
-    df["missense_deleterious_by_alphamissense"] = df["variant_is_missense"] & (
-        alpha_class.isin(ALPHAMISSENSE_DELETERIOUS_CLASSES) | pd.to_numeric(alpha_score, errors="coerce").ge(alphamissense_threshold)
+    alpha_high, esm1b_high, popeve_high, eve_high, revel_or_clinpred_high = normalize_score_columns(
+        df,
+        esm1b_threshold=esm1b_threshold,
+        popeve_threshold=popeve_threshold,
+        eve_threshold=eve_threshold,
+        revel_threshold=revel_threshold,
+        clinpred_threshold=clinpred_threshold,
     )
-    if esm1b_col and esm1b_threshold is not None:
-        df["ESM1b_score"] = df[esm1b_col]
-        df["missense_deleterious_by_esm1b"] = df["variant_is_missense"] & df["ESM1b_score"].ge(esm1b_threshold)
-    else:
-        df["ESM1b_score"] = pd.NA
-        df["missense_deleterious_by_esm1b"] = False
+    df["missense_deleterious_by_cadd"] = df["variant_is_missense"] & df["cadd_phred"].ge(cadd_missense_threshold)
+    df["missense_deleterious_by_alphamissense"] = df["variant_is_missense"] & alpha_high
+    df["missense_deleterious_by_esm1b"] = df["variant_is_missense"] & esm1b_high
+    df["missense_deleterious_by_popeve"] = df["variant_is_missense"] & popeve_high
+    df["missense_deleterious_by_eve"] = df["variant_is_missense"] & eve_high
+    df["missense_deleterious_by_revel_or_clinpred"] = df["variant_is_missense"] & revel_or_clinpred_high
 
+    core_high_count = (
+        df[["missense_deleterious_by_alphamissense", "missense_deleterious_by_esm1b", "missense_deleterious_by_popeve"]]
+        .sum(axis=1)
+        .astype(int)
+    )
+    core_observed_count = (
+        pd.DataFrame(
+            {
+                "am": pd.to_numeric(df.get("am_pathogenicity", pd.Series(index=df.index)), errors="coerce").notna()
+                | df.get("am_class", pd.Series(index=df.index, dtype=object)).notna(),
+                "esm1b": pd.to_numeric(df["ESM1b_score"], errors="coerce").notna(),
+                "popeve": pd.to_numeric(df["popEVE_score"], errors="coerce").notna(),
+            },
+            index=df.index,
+        )
+        .sum(axis=1)
+        .astype(int)
+    )
+    supplemental_high_count = (
+        df[["missense_deleterious_by_eve", "missense_deleterious_by_revel_or_clinpred"]].sum(axis=1).astype(int)
+    )
+    df["missense_core_high_count"] = core_high_count
+    df["missense_core_observed_count"] = core_observed_count
+    df["missense_supplemental_high_count"] = supplemental_high_count
+    df["missense_any_high_count"] = core_high_count + supplemental_high_count
+
+    cadd_high = df["missense_deleterious_by_cadd"]
+    cadd_low = df["variant_is_missense"] & ~cadd_high
+    all_core_available = df["variant_is_missense"] & core_observed_count.eq(3)
+    df["missense_interpretation"] = "not_missense"
+    df.loc[df["variant_is_missense"] & core_observed_count.lt(3), "missense_interpretation"] = (
+        "insufficient_method_coverage"
+    )
+    df.loc[all_core_available & cadd_low & core_high_count.eq(0), "missense_interpretation"] = (
+        "Likely unconsequential"
+    )
+    df.loc[all_core_available & cadd_high & core_high_count.eq(0), "missense_interpretation"] = (
+        "ambigous interpretation"
+    )
+    df.loc[all_core_available & cadd_low & core_high_count.ge(2), "missense_interpretation"] = (
+        "Likely consequential"
+    )
+    df.loc[all_core_available & core_high_count.eq(3), "missense_interpretation"] = "Consequential"
+    df.loc[all_core_available & cadd_high & core_high_count.eq(3), "missense_interpretation"] = "del_missense"
+    df.loc[
+        df["variant_is_missense"]
+        & core_observed_count.lt(3)
+        & (df["missense_any_high_count"].ge(2) | (cadd_high & df["missense_any_high_count"].ge(1))),
+        "missense_interpretation",
+    ] = "Likely consequential"
     df["variant_is_deleterious_missense"] = (
-        df["missense_deleterious_by_cadd"]
-        | df["missense_deleterious_by_alphamissense"]
-        | df["missense_deleterious_by_esm1b"]
+        df["variant_is_missense"]
+        & df["missense_interpretation"].isin(["Likely consequential", "Consequential", "del_missense"])
     )
     df["variant_selected_for_global_maf"] = df["plof_is_not_common_sas"] | df["variant_is_deleterious_missense"]
     df = df[df["variant_selected_for_global_maf"]].copy()
@@ -321,6 +427,14 @@ def prepare_high_moderate_variants(
         "missense_deleterious_by_cadd",
         "missense_deleterious_by_alphamissense",
         "missense_deleterious_by_esm1b",
+        "missense_deleterious_by_popeve",
+        "missense_deleterious_by_eve",
+        "missense_deleterious_by_revel_or_clinpred",
+        "missense_core_high_count",
+        "missense_core_observed_count",
+        "missense_supplemental_high_count",
+        "missense_any_high_count",
+        "missense_interpretation",
         "gene_has_lof",
         "gene_has_deleterious_missense",
         "AF_sas",
@@ -340,6 +454,7 @@ def prepare_high_moderate_variants(
         "CADD_RAW",
         "REVEL",
         "ESM1b_score",
+        "popEVE_score",
         "SIFT",
         "PolyPhen",
         "am_class",
@@ -375,6 +490,23 @@ def write_eur_excluded_genes(variants: pd.DataFrame, output_path: Path, eur_rare
     return set(excluded["ensembl_gene_id"].dropna())
 
 
+def write_eur_excluded_pairs(
+    mapped: pd.DataFrame,
+    output_path: Path,
+    eur_rare_af_max: float,
+) -> set[tuple[str, str]]:
+    eur_af = mapped[["AF_nfe", "AF_fin"]].apply(pd.to_numeric, errors="coerce").fillna(0.0).max(axis=1)
+    eur_rare_mask = eur_af.gt(0) & eur_af.le(eur_rare_af_max)
+    excluded = (
+        mapped.loc[eur_rare_mask, ["ensembl_gene_id", "gene_symbol", "disease_id", "disease_name"]]
+        .drop_duplicates(["ensembl_gene_id", "disease_id"])
+        .sort_values(["gene_symbol", "disease_name", "ensembl_gene_id", "disease_id"], kind="mergesort")
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    excluded.to_parquet(output_path, index=False)
+    return set(zip(excluded["ensembl_gene_id"], excluded["disease_id"]))
+
+
 def semicolon_join(values: pd.Series) -> str:
     seen: list[str] = []
     for value in values.dropna():
@@ -390,13 +522,17 @@ def build_disease_mapping(
     disease_path: Path,
     unmet_needs_path: Path,
     output_path: Path,
-    eur_genes: set[str],
+    eur_pairs_output_path: Path,
     min_score: float,
     eur_rare_af_max: float,
     max_plof_sas_af: float,
     cadd_missense_threshold: float,
     alphamissense_threshold: float,
     esm1b_threshold: float | None,
+    popeve_threshold: float,
+    eve_threshold: float,
+    revel_threshold: float,
+    clinpred_threshold: float,
 ) -> pd.DataFrame:
     (
         NON_DISEASE_THERAPEUTIC_AREAS,
@@ -405,14 +541,18 @@ def build_disease_mapping(
         load_unmet_needs,
     ) = import_build_mapping_helpers()
 
-    variants = variants[~variants["ensembl_gene_id"].isin(eur_genes)].copy()
     disease_terms = load_disease_terms(disease_path, NON_DISEASE_THERAPEUTIC_AREAS)
     unmet_needs = load_unmet_needs(unmet_needs_path)
     disease_gene = load_and_aggregate_evidence(evidence_path, disease_terms, unmet_needs)
     disease_gene = disease_gene[disease_gene["ot_score"] >= min_score].copy()
-    disease_gene = disease_gene[~disease_gene["ensembl_gene_id"].isin(eur_genes)].copy()
 
-    mapped = disease_gene.merge(variants, on="ensembl_gene_id", how="inner")
+    pre_exclusion_mapped = disease_gene.merge(variants, on="ensembl_gene_id", how="inner")
+    eur_pairs = write_eur_excluded_pairs(pre_exclusion_mapped, eur_pairs_output_path, eur_rare_af_max)
+    if eur_pairs:
+        pair_index = pd.MultiIndex.from_frame(pre_exclusion_mapped[["ensembl_gene_id", "disease_id"]])
+        mapped = pre_exclusion_mapped[~pair_index.isin(pd.MultiIndex.from_tuples(eur_pairs))].copy()
+    else:
+        mapped = pre_exclusion_mapped.copy()
     mapped["gene_symbol"] = mapped["gene_symbol"].fillna("")
     mapped = mapped.sort_values(
         ["gene_symbol", "ensembl_gene_id", "ot_score", "disease_name", "chrom_sort", "pos"],
@@ -445,12 +585,22 @@ def build_disease_mapping(
         "cadd_missense_threshold": cadd_missense_threshold,
         "alphamissense_threshold": alphamissense_threshold,
         "esm1b_threshold": esm1b_threshold,
+        "popeve_threshold": popeve_threshold,
+        "eve_threshold": eve_threshold,
+        "revel_threshold": revel_threshold,
+        "clinpred_threshold": clinpred_threshold,
         "esm1b_available": bool(mapped["ESM1b_score"].notna().any()) if "ESM1b_score" in mapped.columns else False,
+        "popeve_available": bool(mapped["popEVE_score"].notna().any()) if "popEVE_score" in mapped.columns else False,
         "median_l2g_score_disease_gene_pairs": float(unique_disease_gene["ot_score"].median()) if len(mapped) else None,
-        "exclude_eur_rare_genes": True,
+        "exclude_eur_rare_genes": False,
+        "exclude_eur_rare_gene_disease_pairs": True,
         "eur_rare_af_max": eur_rare_af_max,
         "eur_rare_populations": ["AF_nfe", "AF_fin"],
-        "eur_rare_excluded_genes": len(eur_genes),
+        "eur_rare_excluded_gene_disease_pairs": len(eur_pairs),
+        "pre_pair_exclusion_disease_gene_pairs": int(
+            pre_exclusion_mapped.drop_duplicates(["ensembl_gene_id", "disease_id"]).shape[0]
+        ),
+        "pre_pair_exclusion_genes": int(pre_exclusion_mapped["ensembl_gene_id"].nunique()),
         "disease_traits_with_unmet_needs": int(mapped.loc[mapped["unmet_need_index"].notna(), "disease_id"].nunique()),
         "disease_gene_pairs_with_unmet_needs": int(
             mapped.loc[mapped["unmet_need_index"].notna(), ["ensembl_gene_id", "disease_id"]]
@@ -473,6 +623,7 @@ def main() -> None:
     parser.add_argument("--annotated-output", type=Path, default=DEFAULT_ANNOTATED)
     parser.add_argument("--high-moderate-output", type=Path, default=DEFAULT_HIGH_MODERATE)
     parser.add_argument("--eur-genes-output", type=Path, default=DEFAULT_EUR_GENES)
+    parser.add_argument("--eur-pairs-output", type=Path, default=DEFAULT_EUR_PAIRS)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--min-score", type=float, default=0.15)
     parser.add_argument("--eur-rare-af-max", type=float, default=0.001)
@@ -500,6 +651,30 @@ def main() -> None:
         default=None,
         help="Optional ESM1b threshold if an ESM1b score column is available.",
     )
+    parser.add_argument(
+        "--popeve-threshold",
+        type=float,
+        default=0.5,
+        help="popEVE pathogenicity threshold if a popEVE score column is available.",
+    )
+    parser.add_argument(
+        "--eve-threshold",
+        type=float,
+        default=0.5,
+        help="Supplemental EVE pathogenicity threshold.",
+    )
+    parser.add_argument(
+        "--revel-threshold",
+        type=float,
+        default=0.5,
+        help="Supplemental REVEL pathogenicity threshold.",
+    )
+    parser.add_argument(
+        "--clinpred-threshold",
+        type=float,
+        default=0.5,
+        help="Supplemental ClinPred pathogenicity threshold.",
+    )
     args = parser.parse_args()
 
     annotated = annotate_vep_with_frequency(args.vep, args.gnomad, args.genome_india, args.annotated_output)
@@ -512,6 +687,10 @@ def main() -> None:
         cadd_missense_threshold=args.cadd_missense_threshold,
         alphamissense_threshold=args.alphamissense_threshold,
         esm1b_threshold=args.esm1b_threshold,
+        popeve_threshold=args.popeve_threshold,
+        eve_threshold=args.eve_threshold,
+        revel_threshold=args.revel_threshold,
+        clinpred_threshold=args.clinpred_threshold,
     )
     print(f"Wrote selected pLoF/deleterious missense variants: {args.high_moderate_output} ({len(variants):,} rows)")
 
@@ -524,13 +703,17 @@ def main() -> None:
         disease_path=args.disease,
         unmet_needs_path=args.unmet_needs,
         output_path=args.output,
-        eur_genes=eur_genes,
+        eur_pairs_output_path=args.eur_pairs_output,
         min_score=args.min_score,
         eur_rare_af_max=args.eur_rare_af_max,
         max_plof_sas_af=args.max_plof_sas_af,
         cadd_missense_threshold=args.cadd_missense_threshold,
         alphamissense_threshold=args.alphamissense_threshold,
         esm1b_threshold=args.esm1b_threshold,
+        popeve_threshold=args.popeve_threshold,
+        eve_threshold=args.eve_threshold,
+        revel_threshold=args.revel_threshold,
+        clinpred_threshold=args.clinpred_threshold,
     )
     print(f"Wrote final disease-gene-variant map: {args.output} ({len(mapped):,} rows)")
     print(f"Genes: {mapped['ensembl_gene_id'].nunique():,}")
