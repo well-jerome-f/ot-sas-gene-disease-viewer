@@ -22,9 +22,9 @@ DEFAULT_DISEASE = BASE_DIR / "disease" / "disease.parquet"
 DEFAULT_UNMET_NEEDS = APP_DIR / "data" / "unmet-needs-index.csv"
 
 DEFAULT_ANNOTATED = BASE_DIR / "vep115.coding.with_sas_india_enrichment.parquet"
-DEFAULT_HIGH_MODERATE = BASE_DIR / "vep115.high_moderate.gene_variants.with_cumulative_af.parquet"
-DEFAULT_EUR_GENES = BASE_DIR / "vep115.high_moderate.eur_rare_excluded_genes.parquet"
-DEFAULT_OUTPUT = BASE_DIR / "ot_sas_gi_vep115_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
+DEFAULT_HIGH_MODERATE = BASE_DIR / "vep115.plof_deleterious_missense.gene_variants.with_global_maf.parquet"
+DEFAULT_EUR_GENES = BASE_DIR / "vep115.plof_deleterious_missense.eur_rare_excluded_genes.parquet"
+DEFAULT_OUTPUT = BASE_DIR / "ot_sas_gi_vep115_plof_deleterious_missense_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
 
 CHROM_ORDER = {str(i): i for i in range(1, 23)} | {"X": 23, "Y": 24, "XY": 25, "MT": 26, "M": 26}
 
@@ -37,6 +37,21 @@ LOF_CONSEQUENCE_TERMS = {
     "stop_lost",
     "start_lost",
 }
+
+ALPHAMISSENSE_DELETERIOUS_CLASSES = {
+    "likely_pathogenic",
+    "likely pathogenic",
+    "pathogenic",
+}
+
+ESM1B_CANDIDATE_COLUMNS = [
+    "ESM1b",
+    "ESM1b_score",
+    "ESM1b_rankscore",
+    "esm1b",
+    "esm1b_score",
+    "esm1b_rankscore",
+]
 
 
 def import_build_mapping_helpers():
@@ -67,6 +82,14 @@ def cumulative_frequency(values: pd.Series) -> float:
     if (freqs >= 1.0).any():
         return 1.0
     return 1.0 - math.exp(float((1.0 - freqs).map(math.log).sum()))
+
+
+def optional_numeric_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for col in candidates:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+            return col
+    return None
 
 
 def parse_float_expr(name: str) -> pl.Expr:
@@ -160,7 +183,14 @@ def is_lof_consequence(consequence: object, impact: object) -> bool:
     return bool(terms & LOF_CONSEQUENCE_TERMS)
 
 
-def prepare_high_moderate_variants(annotated_path: Path, output_path: Path) -> pd.DataFrame:
+def prepare_high_moderate_variants(
+    annotated_path: Path,
+    output_path: Path,
+    max_plof_sas_af: float,
+    cadd_missense_threshold: float,
+    alphamissense_threshold: float,
+    esm1b_threshold: float | None,
+) -> pd.DataFrame:
     df = pd.read_parquet(annotated_path)
     df = df[df["IMPACT"].isin(["HIGH", "MODERATE"])].copy()
     df = df[df["gene_id"].notna() & df["varid"].notna()].copy()
@@ -193,35 +223,80 @@ def prepare_high_moderate_variants(annotated_path: Path, output_path: Path) -> p
         "allofus_sas_af",
         "allofus_eur_af",
         "LOEUF",
+        "am_pathogenicity",
+        "CADD_PHRED",
+        "CADD_RAW",
+        "REVEL",
+        "ClinPred",
+        "EVE_SCORE",
     ]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    esm1b_col = optional_numeric_column(df, ESM1B_CANDIDATE_COLUMNS)
+
+    df["plof_is_not_common_sas"] = df["variant_is_lof"] & df["AF_sas"].fillna(0.0).le(max_plof_sas_af)
+    alpha_class = df.get("am_class", pd.Series(index=df.index, dtype=object)).fillna("").astype(str).str.lower()
+    alpha_score = df.get("am_pathogenicity", pd.Series(index=df.index, dtype=float))
+    df["missense_deleterious_by_cadd"] = df["variant_is_missense"] & df["cadd_phred"].ge(cadd_missense_threshold)
+    df["missense_deleterious_by_alphamissense"] = df["variant_is_missense"] & (
+        alpha_class.isin(ALPHAMISSENSE_DELETERIOUS_CLASSES) | pd.to_numeric(alpha_score, errors="coerce").ge(alphamissense_threshold)
+    )
+    if esm1b_col and esm1b_threshold is not None:
+        df["ESM1b_score"] = df[esm1b_col]
+        df["missense_deleterious_by_esm1b"] = df["variant_is_missense"] & df["ESM1b_score"].ge(esm1b_threshold)
+    else:
+        df["ESM1b_score"] = pd.NA
+        df["missense_deleterious_by_esm1b"] = False
+
+    df["variant_is_deleterious_missense"] = (
+        df["missense_deleterious_by_cadd"]
+        | df["missense_deleterious_by_alphamissense"]
+        | df["missense_deleterious_by_esm1b"]
+    )
+    df["variant_selected_for_global_maf"] = df["plof_is_not_common_sas"] | df["variant_is_deleterious_missense"]
+    df = df[df["variant_selected_for_global_maf"]].copy()
 
     df["sas_enrichment"] = df[["sas_vs_nfe_enrichment", "sas_vs_fin_enrichment"]].max(axis=1, skipna=True)
     df["genome_india_enrichment"] = df[
         ["genome_india_vs_nfe_enrichment", "genome_india_vs_fin_enrichment"]
     ].max(axis=1, skipna=True)
-    df["gene_has_lof"] = df.groupby("ensembl_gene_id")["variant_is_lof"].transform("any")
+    df["gene_has_lof"] = df.groupby("ensembl_gene_id")["plof_is_not_common_sas"].transform("any")
+    df["gene_has_deleterious_missense"] = df.groupby("ensembl_gene_id")["variant_is_deleterious_missense"].transform("any")
 
     unique_variant_classes = df.drop_duplicates(
-        ["ensembl_gene_id", "varid", "variant_is_lof", "variant_is_missense"]
+        [
+            "ensembl_gene_id",
+            "varid",
+            "plof_is_not_common_sas",
+            "variant_is_deleterious_missense",
+            "variant_selected_for_global_maf",
+        ]
     )
     for source_col, prefix in [("AF_sas", "cum_af_sas"), ("genome_india_af", "cum_af_genome_india")]:
         lof_caf = (
-            unique_variant_classes[unique_variant_classes["variant_is_lof"]]
+            unique_variant_classes[unique_variant_classes["plof_is_not_common_sas"]]
             .groupby("ensembl_gene_id")[source_col]
             .apply(cumulative_frequency)
             .rename(f"{prefix}_lof")
         )
         missense_caf = (
-            unique_variant_classes[unique_variant_classes["variant_is_missense"]]
+            unique_variant_classes[unique_variant_classes["variant_is_deleterious_missense"]]
             .groupby("ensembl_gene_id")[source_col]
             .apply(cumulative_frequency)
             .rename(f"{prefix}_missense")
         )
+        global_maf = (
+            unique_variant_classes[unique_variant_classes["variant_selected_for_global_maf"]]
+            .groupby("ensembl_gene_id")[source_col]
+            .apply(cumulative_frequency)
+            .rename(f"global_maf_{source_col.lower()}")
+        )
         df = df.join(lof_caf, on="ensembl_gene_id").join(missense_caf, on="ensembl_gene_id")
+        df = df.join(global_maf, on="ensembl_gene_id")
         df[f"{prefix}_lof"] = df[f"{prefix}_lof"].fillna(0.0)
         df[f"{prefix}_missense"] = df[f"{prefix}_missense"].fillna(0.0)
+        df[f"global_maf_{source_col.lower()}"] = df[f"global_maf_{source_col.lower()}"].fillna(0.0)
 
     keep = [
         "ensembl_gene_id",
@@ -240,7 +315,14 @@ def prepare_high_moderate_variants(annotated_path: Path, output_path: Path) -> p
         "lof",
         "variant_is_lof",
         "variant_is_missense",
+        "plof_is_not_common_sas",
+        "variant_is_deleterious_missense",
+        "variant_selected_for_global_maf",
+        "missense_deleterious_by_cadd",
+        "missense_deleterious_by_alphamissense",
+        "missense_deleterious_by_esm1b",
         "gene_has_lof",
+        "gene_has_deleterious_missense",
         "AF_sas",
         "AF_nfe",
         "AF_fin",
@@ -257,6 +339,7 @@ def prepare_high_moderate_variants(annotated_path: Path, output_path: Path) -> p
         "cadd_phred",
         "CADD_RAW",
         "REVEL",
+        "ESM1b_score",
         "SIFT",
         "PolyPhen",
         "am_class",
@@ -269,6 +352,8 @@ def prepare_high_moderate_variants(annotated_path: Path, output_path: Path) -> p
         "cum_af_sas_missense",
         "cum_af_genome_india_lof",
         "cum_af_genome_india_missense",
+        "global_maf_af_sas",
+        "global_maf_genome_india_af",
     ]
     keep = [col for col in keep if col in df.columns]
     df = df[keep].drop_duplicates()
@@ -308,6 +393,10 @@ def build_disease_mapping(
     eur_genes: set[str],
     min_score: float,
     eur_rare_af_max: float,
+    max_plof_sas_af: float,
+    cadd_missense_threshold: float,
+    alphamissense_threshold: float,
+    esm1b_threshold: float | None,
 ) -> pd.DataFrame:
     (
         NON_DISEASE_THERAPEUTIC_AREAS,
@@ -343,7 +432,20 @@ def build_disease_mapping(
         "disease_traits": int(mapped["disease_id"].nunique()),
         "disease_gene_pairs": int(unique_disease_gene.shape[0]),
         "variants": int(mapped["varid"].nunique()),
-        "lof_variants": int(mapped.loc[mapped["variant_is_lof"], "varid"].nunique()),
+        "plof_variants_not_common_sas": int(mapped.loc[mapped["plof_is_not_common_sas"], "varid"].nunique()),
+        "deleterious_missense_variants": int(
+            mapped.loc[mapped["variant_is_deleterious_missense"], "varid"].nunique()
+        ),
+        "global_maf_variants": int(mapped.loc[mapped["variant_selected_for_global_maf"], "varid"].nunique()),
+        "lof_variants": int(mapped.loc[mapped["plof_is_not_common_sas"], "varid"].nunique()),
+        "genes_with_deleterious_missense": int(
+            mapped.loc[mapped["gene_has_deleterious_missense"], "ensembl_gene_id"].nunique()
+        ),
+        "max_plof_sas_af": max_plof_sas_af,
+        "cadd_missense_threshold": cadd_missense_threshold,
+        "alphamissense_threshold": alphamissense_threshold,
+        "esm1b_threshold": esm1b_threshold,
+        "esm1b_available": bool(mapped["ESM1b_score"].notna().any()) if "ESM1b_score" in mapped.columns else False,
         "median_l2g_score_disease_gene_pairs": float(unique_disease_gene["ot_score"].median()) if len(mapped) else None,
         "exclude_eur_rare_genes": True,
         "eur_rare_af_max": eur_rare_af_max,
@@ -374,13 +476,44 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--min-score", type=float, default=0.15)
     parser.add_argument("--eur-rare-af-max", type=float, default=0.001)
+    parser.add_argument(
+        "--max-plof-sas-af",
+        type=float,
+        default=0.3,
+        help="Retain pLoF only when SAS AF is less than or equal to this value.",
+    )
+    parser.add_argument(
+        "--cadd-missense-threshold",
+        type=float,
+        default=20.0,
+        help="CADD PHRED threshold for deleterious missense classification.",
+    )
+    parser.add_argument(
+        "--alphamissense-threshold",
+        type=float,
+        default=0.564,
+        help="AlphaMissense pathogenicity threshold for deleterious missense classification.",
+    )
+    parser.add_argument(
+        "--esm1b-threshold",
+        type=float,
+        default=None,
+        help="Optional ESM1b threshold if an ESM1b score column is available.",
+    )
     args = parser.parse_args()
 
     annotated = annotate_vep_with_frequency(args.vep, args.gnomad, args.genome_india, args.annotated_output)
     print(f"Wrote annotated VEP/frequency table: {args.annotated_output} ({annotated.height:,} rows)")
 
-    variants = prepare_high_moderate_variants(args.annotated_output, args.high_moderate_output)
-    print(f"Wrote high/moderate gene variants: {args.high_moderate_output} ({len(variants):,} rows)")
+    variants = prepare_high_moderate_variants(
+        args.annotated_output,
+        args.high_moderate_output,
+        max_plof_sas_af=args.max_plof_sas_af,
+        cadd_missense_threshold=args.cadd_missense_threshold,
+        alphamissense_threshold=args.alphamissense_threshold,
+        esm1b_threshold=args.esm1b_threshold,
+    )
+    print(f"Wrote selected pLoF/deleterious missense variants: {args.high_moderate_output} ({len(variants):,} rows)")
 
     eur_genes = write_eur_excluded_genes(variants, args.eur_genes_output, args.eur_rare_af_max)
     print(f"Wrote EUR rare excluded genes: {args.eur_genes_output} ({len(eur_genes):,} genes)")
@@ -394,6 +527,10 @@ def main() -> None:
         eur_genes=eur_genes,
         min_score=args.min_score,
         eur_rare_af_max=args.eur_rare_af_max,
+        max_plof_sas_af=args.max_plof_sas_af,
+        cadd_missense_threshold=args.cadd_missense_threshold,
+        alphamissense_threshold=args.alphamissense_threshold,
+        esm1b_threshold=args.esm1b_threshold,
     )
     print(f"Wrote final disease-gene-variant map: {args.output} ({len(mapped):,} rows)")
     print(f"Genes: {mapped['ensembl_gene_id'].nunique():,}")

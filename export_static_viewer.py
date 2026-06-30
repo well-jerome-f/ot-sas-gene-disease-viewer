@@ -10,7 +10,11 @@ import pandas as pd
 
 
 APP_DIR = Path(__file__).resolve().parent
-DEFAULT_PARQUET = APP_DIR / "data" / "ot_sas_gi_vep115_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
+DEFAULT_PARQUET = (
+    APP_DIR
+    / "data"
+    / "ot_sas_gi_vep115_plof_deleterious_missense_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
+)
 DEFAULT_STATIC_DIR = APP_DIR / "static"
 DEFAULT_DB = DEFAULT_STATIC_DIR / "data" / "ot_sas_viewer.sqlite"
 
@@ -34,14 +38,18 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
             variant_count=("varid", "nunique"),
             max_score=("ot_score", "max"),
             gene_has_lof=("gene_has_lof", "max"),
+            gene_has_deleterious_missense=("gene_has_deleterious_missense", "max"),
             cum_af_sas_lof=("cum_af_sas_lof", "max"),
             cum_af_sas_missense=("cum_af_sas_missense", "max"),
             cum_af_genome_india_lof=("cum_af_genome_india_lof", "max"),
             cum_af_genome_india_missense=("cum_af_genome_india_missense", "max"),
+            global_maf_af_sas=("global_maf_af_sas", "max"),
+            global_maf_genome_india_af=("global_maf_genome_india_af", "max"),
         )
         .reset_index()
     )
     genes["gene_has_lof"] = genes["gene_has_lof"].astype(int)
+    genes["gene_has_deleterious_missense"] = genes["gene_has_deleterious_missense"].astype(int)
     genes["gene_symbol"] = genes["gene_symbol"].fillna("")
     genes["symbol_missing"] = genes["gene_symbol"].eq("").astype(int)
     genes = genes.sort_values(["symbol_missing", "gene_symbol", "ensembl_gene_id"], kind="mergesort").drop(
@@ -85,6 +93,14 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
                 "genome_india_vs_fin_enrichment",
                 "consequence",
                 "impact",
+                "plof_is_not_common_sas",
+                "variant_is_deleterious_missense",
+                "missense_deleterious_by_cadd",
+                "missense_deleterious_by_alphamissense",
+                "missense_deleterious_by_esm1b",
+                "am_pathogenicity",
+                "am_class",
+                "ESM1b_score",
             ]
         ]
         .drop_duplicates(
@@ -102,6 +118,8 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
                 "genome_india_enrichment",
                 "consequence",
                 "impact",
+                "plof_is_not_common_sas",
+                "variant_is_deleterious_missense",
             ]
         )
         .sort_values(["ensembl_gene_id", "chrom_sort", "pos", "varid"], kind="mergesort")
@@ -114,7 +132,11 @@ def build_sqlite(parquet_path: Path, db_path: Path) -> dict[str, int | float | s
         "disease_traits": int(df["disease_id"].nunique()),
         "disease_gene_pairs": int(unique_disease_gene.shape[0]),
         "variants": int(df["varid"].nunique()),
-        "lof_variants": int(df.loc[df["variant_is_lof"], "varid"].nunique()),
+        "lof_variants": int(df.loc[df["plof_is_not_common_sas"], "varid"].nunique()),
+        "deleterious_missense_variants": int(df.loc[df["variant_is_deleterious_missense"], "varid"].nunique()),
+        "genes_with_deleterious_missense": int(
+            df.loc[df["gene_has_deleterious_missense"], "ensembl_gene_id"].nunique()
+        ),
         "median_l2g_score_disease_gene_pairs": float(unique_disease_gene["ot_score"].median()),
         "min_l2g_score": float(df["ot_score"].min()),
         "disease_traits_with_unmet_needs": int(df.loc[df["unmet_need_index"].notna(), "disease_id"].nunique()),
