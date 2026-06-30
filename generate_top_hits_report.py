@@ -6,6 +6,7 @@ import html
 from pathlib import Path
 
 import pandas as pd
+import polars as pl
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -15,6 +16,7 @@ DEFAULT_PARQUET = (
     / "ot_sas_gi_vep115_plof_deleterious_missense_disease_gene_variant_map.india_exclusive.score_ge_0.15.parquet"
 )
 DEFAULT_HTML = APP_DIR / "reports" / "top_100_hits.html"
+DEFAULT_OT_REF = Path("/Users/jerome/work_data/codex_workspace/gnomad_sas_parquet/opentargets_26_06")
 
 
 def esc(value: object) -> str:
@@ -74,7 +76,88 @@ def variant_table(df: pd.DataFrame) -> str:
     return f"<table><thead><tr>{headers}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
 
 
-def build_report(parquet_path: Path, html_path: Path, limit: int) -> None:
+def load_target_reference(ref_dir: Path, target_ids: set[str]) -> dict[str, dict[str, str]]:
+    target = (
+        pl.scan_parquet(str(ref_dir / "target" / "*.parquet"))
+        .filter(pl.col("id").is_in(sorted(target_ids)))
+        .select("id", "approvedName", "functionDescriptions", "pathways")
+        .collect()
+        .to_pandas()
+    )
+    result = {}
+    for row in target.itertuples(index=False):
+        funcs = row.functionDescriptions if isinstance(row.functionDescriptions, list) else []
+        pathways = row.pathways if isinstance(row.pathways, list) else []
+        pathway_names = []
+        for p in pathways[:8]:
+            if isinstance(p, dict) and p.get("pathway"):
+                pathway_names.append(str(p["pathway"]))
+        result[row.id] = {
+            "approved_name": row.approvedName or "",
+            "function": " ".join(str(x) for x in funcs[:3]) if funcs else "",
+            "pathways": "; ".join(pathway_names),
+        }
+    return result
+
+
+def load_drug_reference(ref_dir: Path, target_ids: set[str], disease_ids: set[str]) -> dict[tuple[str, str], str]:
+    moa = (
+        pl.scan_parquet(str(ref_dir / "drug_mechanism_of_action" / "*.parquet"))
+        .select("actionType", "mechanismOfAction", "chemblIds", "targetName", "targets")
+        .explode("targets")
+        .filter(pl.col("targets").is_in(sorted(target_ids)))
+        .explode("chemblIds")
+        .rename({"targets": "targetId", "chemblIds": "drugId"})
+    )
+    indications = (
+        pl.scan_parquet(str(ref_dir / "clinical_indication" / "*.parquet"))
+        .filter(pl.col("diseaseId").is_in(sorted(disease_ids)))
+        .select("drugId", "diseaseId", "maxClinicalStage")
+    )
+    molecules = pl.scan_parquet(str(ref_dir / "drug_molecule" / "*.parquet")).select(
+        "id", "name", "maximumClinicalStage", "description"
+    )
+    joined = (
+        moa.join(indications, on="drugId", how="inner")
+        .join(molecules, left_on="drugId", right_on="id", how="left")
+        .collect()
+        .to_pandas()
+    )
+    result: dict[tuple[str, str], list[str]] = {}
+    for row in joined.itertuples(index=False):
+        key = (row.targetId, row.diseaseId)
+        drug = row.name or row.drugId
+        stage = row.maxClinicalStage or row.maximumClinicalStage or ""
+        mechanism = row.mechanismOfAction or ""
+        item = f"{drug} ({stage}; {mechanism})"
+        result.setdefault(key, [])
+        if item not in result[key]:
+            result[key].append(item)
+    return {key: "; ".join(values[:8]) for key, values in result.items()}
+
+
+def load_biology_reference(ref_dir: Path, target_ids: set[str], disease_ids: set[str]) -> dict[tuple[str, str], str]:
+    assoc = (
+        pl.scan_parquet(str(ref_dir / "association_by_datasource_direct" / "*.parquet"))
+        .filter(pl.col("targetId").is_in(sorted(target_ids)) & pl.col("diseaseId").is_in(sorted(disease_ids)))
+        .select("diseaseId", "targetId", "aggregationValue", "associationScore", "evidenceCount")
+        .collect()
+        .to_pandas()
+    )
+    if assoc.empty:
+        return {}
+    assoc = assoc.sort_values(["targetId", "diseaseId", "associationScore"], ascending=[True, True, False])
+    result: dict[tuple[str, str], list[str]] = {}
+    for row in assoc.itertuples(index=False):
+        key = (row.targetId, row.diseaseId)
+        item = f"{row.aggregationValue}: score {fmt(row.associationScore, 3)}, evidence {fmt(row.evidenceCount, 0)}"
+        result.setdefault(key, [])
+        if item not in result[key]:
+            result[key].append(item)
+    return {key: "; ".join(values[:8]) for key, values in result.items()}
+
+
+def build_report(parquet_path: Path, html_path: Path, limit: int, ot_ref_dir: Path) -> None:
     df = pd.read_parquet(parquet_path)
     df["unmet_rank"] = pd.to_numeric(df.get("unmet_need_index"), errors="coerce").fillna(-1)
     df["rank_maf"] = pd.to_numeric(df.get("global_maf_af_sas"), errors="coerce").fillna(0)
@@ -87,6 +170,11 @@ def build_report(parquet_path: Path, html_path: Path, limit: int) -> None:
         )
         .head(limit)
     )
+    target_ids = set(pair_rank["ensembl_gene_id"].dropna())
+    disease_ids = set(pair_rank["disease_id"].dropna())
+    target_ref = load_target_reference(ot_ref_dir, target_ids)
+    drug_ref = load_drug_reference(ot_ref_dir, target_ids, disease_ids)
+    biology_ref = load_biology_reference(ot_ref_dir, target_ids, disease_ids)
 
     css = """
     @page { size: letter; margin: 0.65in; }
@@ -115,19 +203,34 @@ def build_report(parquet_path: Path, html_path: Path, limit: int) -> None:
         anchor = f"hit-{i}"
         pair_df = df[(df["ensembl_gene_id"] == pair.ensembl_gene_id) & (df["disease_id"] == pair.disease_id)]
         title = f"{pair.gene_symbol or pair.ensembl_gene_id} - {pair.disease_name}"
+        key = (pair.ensembl_gene_id, pair.disease_id)
         toc_items.append(
             f'<li><a href="#{anchor}">{i}. {esc(title)}</a> '
             f'<span class="muted">L2G {fmt(pair.ot_score, 3)}; unmet {fmt(getattr(pair, "unmet_need_index", None), 3)}</span></li>'
         )
-        gene_summary = (
-            "Not available in the current local cache. Add Open Targets/UniProt target metadata to populate this section."
+        target_info = target_ref.get(pair.ensembl_gene_id, {})
+        gene_summary = target_info.get("function") or target_info.get("approved_name") or (
+            "No Open Targets target function description available."
         )
-        drugs = "Not available in the current local cache. Add Open Targets known-drug rows to populate this section."
-        biology = (
-            f"Open Targets GWAS credible-set evidence supports this gene-disease pair with L2G score "
-            f"{fmt(pair.ot_score, 3)} across {fmt(getattr(pair, 'evidence_count', None), 0)} evidence rows and "
-            f"{fmt(getattr(pair, 'study_locus_count', None), 0)} study loci."
+        if target_info.get("pathways"):
+            gene_summary += f" Pathways: {target_info['pathways']}."
+        drugs = drug_ref.get(key) or (
+            "No same target-disease clinical indication found in the downloaded Open Targets drug tables."
         )
+        biology = biology_ref.get(key)
+        if biology:
+            biology = (
+                f"Datasource-level direct associations: {biology}. GWAS credible-set evidence in this analysis has "
+                f"L2G {fmt(pair.ot_score, 3)}, {fmt(getattr(pair, 'evidence_count', None), 0)} evidence rows, and "
+                f"{fmt(getattr(pair, 'study_locus_count', None), 0)} study loci."
+            )
+        else:
+            biology = (
+                f"GWAS credible-set evidence supports this gene-disease pair with L2G score {fmt(pair.ot_score, 3)} "
+                f"across {fmt(getattr(pair, 'evidence_count', None), 0)} evidence rows and "
+                f"{fmt(getattr(pair, 'study_locus_count', None), 0)} study loci. No datasource-level direct association "
+                f"summary was found in the downloaded association table."
+            )
         prevalence = first_non_empty(pair_df.get("unmet_need_prevalence", pd.Series(dtype=object)))
         if not prevalence:
             prevalence = "No SAS/Indian prevalence estimate is available in the current local cache."
@@ -187,9 +290,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate top-hit HTML report for PDF printing.")
     parser.add_argument("--parquet", type=Path, default=DEFAULT_PARQUET)
     parser.add_argument("--html", type=Path, default=DEFAULT_HTML)
+    parser.add_argument("--ot-ref-dir", type=Path, default=DEFAULT_OT_REF)
     parser.add_argument("--limit", type=int, default=100)
     args = parser.parse_args()
-    build_report(args.parquet, args.html, args.limit)
+    build_report(args.parquet, args.html, args.limit, args.ot_ref_dir)
 
 
 if __name__ == "__main__":
